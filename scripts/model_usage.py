@@ -233,7 +233,7 @@ def fmt_money(value: float) -> str:
 
 
 def render_text_summary(data: dict[str, Any]) -> str:
-    lines = [f"Rows: {data['rows']}", "Models:"]
+    lines = [f"Usage records: {data['rows']}", "Models:"]
     for item in data["models"]:
         lines.append(
             f"- {item['provider']} / {item['model']}: {fmt_money(item['cost_total_usd'])}, "
@@ -243,7 +243,7 @@ def render_text_summary(data: dict[str, Any]) -> str:
 
 
 def render_text_agents(data: dict[str, Any]) -> str:
-    lines = [f"Rows: {data['rows']}", "Agents:"]
+    lines = [f"Usage records: {data['rows']}", "Agents:"]
     for item in data["agents"]:
         lines.append(
             f"- {item['agent']}: {fmt_money(item['cost_total_usd'])}, "
@@ -253,7 +253,7 @@ def render_text_agents(data: dict[str, Any]) -> str:
 
 
 def render_text_daily(data: dict[str, Any], limit: int) -> str:
-    lines = [f"Rows: {data['rows']}", "Daily:"]
+    lines = [f"Usage records: {data['rows']}", "Daily:"]
     for item in data['daily'][:limit]:
         lines.append(
             f"- {item['date']} | {item['provider']}/{item['model']}: {fmt_money(item['cost_total_usd'])}, "
