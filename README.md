@@ -22,6 +22,7 @@ This skill is a local-first alternative that reads OpenClaw session JSONL logs d
 - `SKILL.md` — instructions for when/how an agent should use the skill
 - `scripts/model_usage.py` — deterministic Python CLI for parsing local usage data
 - `references/discovery.md` — notes on available local data sources and reliable fields
+- `tests/smoke_test.py` — minimal fixture-based smoke test
 
 ## Primary data source
 
@@ -37,6 +38,21 @@ python scripts/model_usage.py summary
 python scripts/model_usage.py agents
 python scripts/model_usage.py daily --limit 20
 python scripts/model_usage.py summary --json --pretty
+```
+
+## Example output
+
+```text
+Rows: 3
+Models:
+- openai-codex / gpt-5.4: $0.0099, 2,500 tokens, 2 calls
+- ollama / kimi-k2.5:cloud: $0.0000, 600 tokens, 1 calls
+```
+
+## Smoke test
+
+```bash
+python tests/smoke_test.py
 ```
 
 ## Design goals
