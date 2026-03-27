@@ -2,12 +2,14 @@
 
 A portable AgentSkill and Python CLI for inspecting local OpenClaw model usage directly from session logs.
 
-## What it does
+## Overview
 
-This project helps answer questions like:
+`openclaw-model-usage` summarizes local model usage from OpenClaw session JSONL files.
+
+It can answer questions such as:
 - what model is currently being used?
 - what models have been used recently?
-- how much token/cost usage is attributed to each model?
+- how much token and cost usage is attributed to each model?
 - which agents are using which models?
 - what does usage look like by day?
 
@@ -15,17 +17,37 @@ This project helps answer questions like:
 
 Some model-usage workflows depend on external tooling such as CodexBar.
 
-This project is a local-first alternative that reads OpenClaw session JSONL logs directly and can work without that dependency.
+This project is a local-first alternative that reads OpenClaw session logs directly, making it useful when direct session-log inspection is preferred or when external tooling is unavailable.
 
-## Two roles, one repo
+## One canonical repo, two interfaces
 
 This repo is intended to serve both as:
 - a **portable AgentSkill** via `SKILL.md`
 - a **small Python CLI** via the packaged `openclaw-model-usage` command
 
-That keeps the implementation and the published skill aligned in one canonical place.
+That keeps the implementation, local usage, and published skill aligned in one canonical place.
 
-## Structure
+## Features
+
+- current / most recent model
+- usage summary by provider/model
+- token totals by model
+- cost totals by model when available
+- per-agent usage summary
+- daily usage summary
+- JSON output for scripting
+
+## Data source
+
+Primary source:
+
+```bash
+~/.openclaw/agents/*/sessions/*.jsonl
+```
+
+See `references/discovery.md` for the field inventory and reliability notes.
+
+## Repo structure
 
 - `SKILL.md` — instructions for agent use
 - `scripts/model_usage.py` — bundled script used by the skill
@@ -33,13 +55,9 @@ That keeps the implementation and the published skill aligned in one canonical p
 - `references/discovery.md` — local data source notes
 - `tests/smoke_test.py` — minimal fixture-based smoke test
 
-## Primary data source
-
-```bash
-~/.openclaw/agents/*/sessions/*.jsonl
-```
-
 ## CLI usage
+
+Run with uv:
 
 ```bash
 uv run --project . openclaw-model-usage current
@@ -50,6 +68,8 @@ uv run --project . openclaw-model-usage summary --json --pretty
 ```
 
 ## Script usage
+
+Run the bundled script directly:
 
 ```bash
 python scripts/model_usage.py current
@@ -67,11 +87,18 @@ Models:
 - ollama / kimi-k2.5:cloud: $0.0000, 600 tokens, 1 calls
 ```
 
-## Smoke test
+## Testing
+
+Smoke test:
 
 ```bash
 python tests/smoke_test.py
 ```
+
+CI also checks:
+- CLI help
+- smoke test execution
+- package build
 
 ## Design goals
 
