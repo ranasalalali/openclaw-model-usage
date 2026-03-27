@@ -1,5 +1,7 @@
 # openclaw-model-usage
 
+[![CI](https://github.com/ranasalalali/openclaw-model-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/ranasalalali/openclaw-model-usage/actions/workflows/ci.yml)
+
 A portable AgentSkill and Python CLI for inspecting local OpenClaw model usage directly from session logs.
 
 ## Overview
@@ -13,7 +15,15 @@ It can answer questions such as:
 - which agents are using which models?
 - what does usage look like by day?
 
-## Why it exists
+## Quick start
+
+```bash
+uv run --project . openclaw-model-usage current
+uv run --project . openclaw-model-usage summary
+uv run --project . openclaw-model-usage summary --json --pretty
+```
+
+## Why this exists
 
 Some model-usage workflows depend on external tooling such as CodexBar.
 
@@ -21,7 +31,7 @@ This project is a local-first alternative that reads OpenClaw session logs direc
 
 ## One canonical repo, two interfaces
 
-This repo is intended to serve both as:
+This repo serves both as:
 - a **portable AgentSkill** via `SKILL.md`
 - a **small Python CLI** via the packaged `openclaw-model-usage` command
 
@@ -47,15 +57,9 @@ Primary source:
 
 See `references/discovery.md` for the field inventory and reliability notes.
 
-## Repo structure
+## Usage
 
-- `SKILL.md` — instructions for agent use
-- `scripts/model_usage.py` — bundled script used by the skill
-- `src/openclaw_model_usage/cli.py` — packaged CLI entrypoint
-- `references/discovery.md` — local data source notes
-- `tests/smoke_test.py` — minimal fixture-based smoke test
-
-## CLI usage
+### CLI
 
 Run with uv:
 
@@ -67,7 +71,7 @@ uv run --project . openclaw-model-usage daily --limit 20
 uv run --project . openclaw-model-usage summary --json --pretty
 ```
 
-## Script usage
+### Bundled script
 
 Run the bundled script directly:
 
@@ -77,6 +81,14 @@ python scripts/model_usage.py summary
 python scripts/model_usage.py agents
 python scripts/model_usage.py daily --limit 20
 ```
+
+## Repo structure
+
+- `SKILL.md` — instructions for agent use
+- `scripts/model_usage.py` — bundled script used by the skill
+- `src/openclaw_model_usage/cli.py` — packaged CLI entrypoint
+- `references/discovery.md` — local data source notes
+- `tests/smoke_test.py` — minimal fixture-based smoke test
 
 ## Example output
 
