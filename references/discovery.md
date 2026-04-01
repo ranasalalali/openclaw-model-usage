@@ -50,10 +50,12 @@ Useful for:
 ## Attribution rules used in Phase 1
 
 1. Build usage rows from assistant message events in `*.jsonl`.
-2. Join each row to same-agent session metadata from `sessions.json` using `sessionId`.
+2. Join each row to session metadata from `sessions.json` using `sessionId`.
 3. Use the JSONL session header to fill obvious gaps such as start timestamp and cwd.
-4. Derive parent session IDs from `sessions.json` `spawnedBy` session keys when available.
-5. Do not infer repo/project attribution unless the logs state it directly.
+4. Accept that the JSONL header `id` can differ from the filename/sessionId on real local logs; treat it as an alias, not the only identifier.
+5. Derive parent session IDs from `sessions.json` `spawnedBy` session keys when available, with a global session-key fallback if same-agent lookup misses.
+6. Keep metadata-only sessions in session/subagent/tree outputs even when a session has not emitted assistant usage rows yet.
+7. Do not infer repo/project attribution unless the logs state it directly.
 
 ## Practical guidance
 

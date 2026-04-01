@@ -31,7 +31,24 @@ def main() -> int:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     (SESSION_DIR / "parent-session.jsonl").write_text(FIXTURE_PARENT.read_text())
     (SESSION_DIR / "child-session.jsonl").write_text(FIXTURE_CHILD.read_text())
-    (SESSION_DIR / "sessions.json").write_text(FIXTURE_SESSIONS.read_text())
+
+    sessions = json.loads(FIXTURE_SESSIONS.read_text())
+    sessions["agent:sample-agent:subagent:no-usage"] = {
+        "sessionId": "child-no-usage",
+        "label": "metadata-only-subagent",
+        "channel": "discord",
+        "status": "done",
+        "spawnDepth": 1,
+        "subagentRole": "leaf",
+        "spawnedBy": "agent:sample-agent:discord:channel:123",
+        "startedAt": 1774602600000,
+        "updatedAt": 1774602900000,
+        "sessionFile": "/tmp/sample-agent/sessions/child-no-usage.jsonl",
+    }
+    (SESSION_DIR / "sessions.json").write_text(json.dumps(sessions))
+    (SESSION_DIR / "child-no-usage.jsonl").write_text(
+        '{"type":"session","version":3,"id":"header-only-child-no-usage","timestamp":"2026-03-27T09:10:00.000Z","cwd":"/tmp/workspace"}\n'
+    )
 
     summary = json.loads(run("summary", "--root", str(FIXTURE_ROOT), "--json"))
     assert summary["rows"] == 3
@@ -49,20 +66,24 @@ def main() -> int:
     assert agents["agents"][0]["sessions"] == 2
 
     sessions = json.loads(run("sessions", "--root", str(FIXTURE_ROOT), "--json"))
-    assert len(sessions["sessions"]) == 2
+    assert len(sessions["sessions"]) == 3
     child = next(item for item in sessions["sessions"] if item["session_id"] == "child-session")
     assert child["parent_session_id"] == "parent-session"
     assert child["spawn_depth"] == 1
+    metadata_only = next(item for item in sessions["sessions"] if item["session_id"] == "child-no-usage")
+    assert metadata_only["parent_session_id"] == "parent-session"
+    assert metadata_only["calls"] == 0
+    assert metadata_only["started_at"] == "2026-03-27T09:10:00Z"
 
     subagents = json.loads(run("subagents", "--root", str(FIXTURE_ROOT), "--json"))
-    assert len(subagents["subagents"]) == 1
-    assert subagents["subagents"][0]["session_id"] == "child-session"
+    assert len(subagents["subagents"]) == 2
+    assert {item["session_id"] for item in subagents["subagents"]} == {"child-session", "child-no-usage"}
 
     tree = json.loads(run("session-tree", "--root", str(FIXTURE_ROOT), "--json"))
     assert len(tree["trees"]) == 1
     assert tree["trees"][0]["session_id"] == "parent-session"
     assert tree["trees"][0]["tree_total_tokens"] == 3100
-    assert tree["trees"][0]["children"][0]["session_id"] == "child-session"
+    assert {item["session_id"] for item in tree["trees"][0]["children"]} == {"child-session", "child-no-usage"}
 
     daily = json.loads(run("daily", "--root", str(FIXTURE_ROOT), "--json"))
     assert len(daily["daily"]) >= 2

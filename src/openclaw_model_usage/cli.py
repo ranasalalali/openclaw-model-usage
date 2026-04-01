@@ -125,6 +125,7 @@ def epoch_ms_to_iso(value: Any) -> str | None:
 def load_sessions_index(root: Path, agents: set[str] | None) -> dict[tuple[str, str], SessionMeta]:
     by_session: dict[tuple[str, str], SessionMeta] = {}
     key_to_session_id: dict[tuple[str, str], str] = {}
+    global_key_to_session_id: dict[str, str] = {}
 
     for agent, agent_dir in iter_agent_dirs(root, agents):
         index_path = agent_dir / "sessions" / "sessions.json"
@@ -169,10 +170,11 @@ def load_sessions_index(root: Path, agents: set[str] | None) -> dict[tuple[str, 
             by_session[(agent, session_id)] = meta
             if meta.session_key:
                 key_to_session_id[(agent, meta.session_key)] = session_id
+                global_key_to_session_id[meta.session_key] = session_id
 
     for meta in by_session.values():
         if meta.spawned_by:
-            meta.spawned_by_session_id = key_to_session_id.get((meta.agent, meta.spawned_by))
+            meta.spawned_by_session_id = key_to_session_id.get((meta.agent, meta.spawned_by)) or global_key_to_session_id.get(meta.spawned_by)
 
     return by_session
 
@@ -195,6 +197,9 @@ def load_session_headers(root: Path, agents: set[str] | None) -> dict[tuple[str,
         if obj.get("type") != "session":
             continue
         headers[(agent, session_id)] = obj
+        header_id = obj.get("id")
+        if isinstance(header_id, str) and header_id:
+            headers.setdefault((agent, header_id), obj)
     return headers
 
 
@@ -411,8 +416,21 @@ def summarise_by_session(rows: list[UsageRow], session_meta: dict[tuple[str, str
         item["models"].add(f"{row.provider}/{row.model}")
         item["first_timestamp"] = item["first_timestamp"] or row.timestamp
         item["last_timestamp"] = row.timestamp
+
+    all_keys = set(by_session) | set(session_meta)
     sessions_out = []
-    for key, item in sorted(by_session.items(), key=lambda kv: (kv[1]["cost_total_usd"], kv[1]["last_timestamp"] or ""), reverse=True):
+    for key in sorted(all_keys, key=lambda k: (
+        by_session.get(k, {}).get("cost_total_usd", 0.0),
+        by_session.get(k, {}).get("last_timestamp") or (session_meta.get(k).updated_at if session_meta.get(k) else "") or (session_meta.get(k).started_at if session_meta.get(k) else ""),
+    ), reverse=True):
+        item = by_session.get(key) or {
+            "calls": 0,
+            "total_tokens": 0,
+            "cost_total_usd": 0.0,
+            "models": set(),
+            "first_timestamp": None,
+            "last_timestamp": None,
+        }
         meta = session_meta.get(key) or SessionMeta(agent=key[0], session_id=key[1])
         sessions_out.append({
             "agent": key[0],
@@ -429,7 +447,7 @@ def summarise_by_session(rows: list[UsageRow], session_meta: dict[tuple[str, str
             "cost_total_usd": round(item["cost_total_usd"], 6),
             "models": sorted(item["models"]),
             "started_at": meta.started_at or item["first_timestamp"],
-            "last_timestamp": item["last_timestamp"],
+            "last_timestamp": item["last_timestamp"] or meta.updated_at or meta.started_at,
             "status": meta.status,
         })
     return {"rows": len(rows), "sessions": sessions_out}
