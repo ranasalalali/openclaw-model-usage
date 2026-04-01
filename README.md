@@ -50,8 +50,8 @@ That keeps the implementation, local usage, and published skill aligned in one c
 - per-agent usage summary
 - daily usage summary
 - session-aware usage attribution
-- subagent usage attribution using `sessions.json`
-- parent/child session tree rollups
+- subagent usage attribution using `sessions.json`, with fallback inference from subagent prompts in session logs when index metadata is missing
+- parent/child session tree rollups when parent linkage metadata is available
 - JSON output for scripting
 
 ## Data sources

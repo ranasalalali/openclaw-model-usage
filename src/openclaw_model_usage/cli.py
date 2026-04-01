@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -179,37 +180,105 @@ def load_sessions_index(root: Path, agents: set[str] | None) -> dict[tuple[str, 
     return by_session
 
 
-def load_session_headers(root: Path, agents: set[str] | None) -> dict[tuple[str, str], dict[str, Any]]:
-    headers: dict[tuple[str, str], dict[str, Any]] = {}
+def extract_text_content(message: dict[str, Any]) -> str | None:
+    content = message.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                return part["text"]
+    if isinstance(content, str):
+        return content
+    return None
+
+
+def infer_meta_from_text(text: str) -> dict[str, Any]:
+    inferred: dict[str, Any] = {}
+    if "[Subagent Context]" not in text and "# Subagent Context" not in text:
+        return inferred
+
+    depth_match = re.search(r"subagent \(depth\s+(\d+)/(\d+)\)", text, flags=re.IGNORECASE)
+    if depth_match:
+        inferred["spawn_depth"] = int(depth_match.group(1))
+
+    task_match = re.search(r"\[Subagent Task\]:\s*(.+)", text)
+    if task_match:
+        inferred["label"] = task_match.group(1).strip()
+
+    requester_match = re.search(r"Requester session:\s*(\S+)", text)
+    if requester_match:
+        inferred["spawned_by"] = requester_match.group(1).strip()
+
+    session_match = re.search(r"Your session:\s*(\S+)", text)
+    if session_match:
+        inferred["session_key"] = session_match.group(1).strip()
+
+    channel_match = re.search(r"Requester channel:\s*([^\n]+)", text)
+    if channel_match:
+        channel_text = channel_match.group(1).strip()
+        if channel_text:
+            inferred["channel"] = channel_text.split()[0]
+
+    if inferred:
+        inferred.setdefault("subagent_role", "leaf")
+    return inferred
+
+
+def load_session_hints(root: Path, agents: set[str] | None) -> dict[tuple[str, str], dict[str, Any]]:
+    hints: dict[tuple[str, str], dict[str, Any]] = {}
     for agent, path in iter_session_files(root, agents):
         session_id = path.stem
         try:
             with path.open("r", encoding="utf-8") as handle:
-                first_line = handle.readline().strip()
+                for line_number, line in enumerate(handle, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if line_number == 1 and obj.get("type") == "session":
+                        hints[(agent, session_id)] = obj
+                        header_id = obj.get("id")
+                        if isinstance(header_id, str) and header_id:
+                            hints.setdefault((agent, header_id), obj)
+                        continue
+                    if obj.get("type") != "message":
+                        continue
+                    message = obj.get("message") or {}
+                    if message.get("role") != "user":
+                        continue
+                    text = extract_text_content(message)
+                    if not text:
+                        continue
+                    inferred = infer_meta_from_text(text)
+                    if inferred:
+                        hints.setdefault((agent, session_id), {}).update(inferred)
+                    break
         except OSError:
             continue
-        if not first_line:
-            continue
-        try:
-            obj = json.loads(first_line)
-        except json.JSONDecodeError:
-            continue
-        if obj.get("type") != "session":
-            continue
-        headers[(agent, session_id)] = obj
-        header_id = obj.get("id")
-        if isinstance(header_id, str) and header_id:
-            headers.setdefault((agent, header_id), obj)
-    return headers
+    return hints
 
 
-def merge_session_meta(index_meta: SessionMeta | None, header: dict[str, Any] | None, agent: str, session_id: str) -> SessionMeta:
+def merge_session_meta(index_meta: SessionMeta | None, hint: dict[str, Any] | None, agent: str, session_id: str) -> SessionMeta:
     meta = index_meta or SessionMeta(agent=agent, session_id=session_id)
-    if header:
-        if isinstance(header.get("timestamp"), str) and not meta.started_at:
-            meta.started_at = header["timestamp"]
-        if isinstance(header.get("cwd"), str) and not meta.cwd:
-            meta.cwd = header["cwd"]
+    if hint:
+        if isinstance(hint.get("timestamp"), str) and not meta.started_at:
+            meta.started_at = hint["timestamp"]
+        if isinstance(hint.get("cwd"), str) and not meta.cwd:
+            meta.cwd = hint["cwd"]
+        if isinstance(hint.get("label"), str) and not meta.label:
+            meta.label = hint["label"]
+        if isinstance(hint.get("channel"), str) and not meta.channel:
+            meta.channel = hint["channel"]
+        if isinstance(hint.get("session_key"), str) and not meta.session_key:
+            meta.session_key = hint["session_key"]
+        if isinstance(hint.get("spawned_by"), str) and not meta.spawned_by:
+            meta.spawned_by = hint["spawned_by"]
+        if isinstance(hint.get("spawn_depth"), int) and meta.spawn_depth is None:
+            meta.spawn_depth = hint["spawn_depth"]
+        if isinstance(hint.get("subagent_role"), str) and not meta.subagent_role:
+            meta.subagent_role = hint["subagent_role"]
     if not meta.session_file:
         meta.session_file = str(DEFAULT_ROOT / agent / "sessions" / f"{session_id}.jsonl")
     return meta
@@ -230,13 +299,24 @@ def load_rows(
         cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
 
     session_index = load_sessions_index(root, agents)
-    session_headers = load_session_headers(root, agents)
+    session_hints = load_session_hints(root, agents)
     session_meta: dict[tuple[str, str], SessionMeta] = {}
 
-    for agent, path in iter_session_files(root, agents):
+    session_files = list(iter_session_files(root, agents))
+    for agent, path in session_files:
         session_id = path.stem
-        meta = merge_session_meta(session_index.get((agent, session_id)), session_headers.get((agent, session_id)), agent, session_id)
+        meta = merge_session_meta(session_index.get((agent, session_id)), session_hints.get((agent, session_id)), agent, session_id)
         session_meta[(agent, session_id)] = meta
+
+    key_to_session_id = {(meta.agent, meta.session_key): meta.session_id for meta in session_meta.values() if meta.session_key}
+    global_key_to_session_id = {meta.session_key: meta.session_id for meta in session_meta.values() if meta.session_key}
+    for meta in session_meta.values():
+        if meta.spawned_by and not meta.spawned_by_session_id:
+            meta.spawned_by_session_id = key_to_session_id.get((meta.agent, meta.spawned_by)) or global_key_to_session_id.get(meta.spawned_by)
+
+    for agent, path in session_files:
+        session_id = path.stem
+        meta = session_meta[(agent, session_id)]
         if session_ids and session_id not in session_ids:
             continue
         if channels and (meta.channel not in channels):

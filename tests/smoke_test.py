@@ -49,24 +49,29 @@ def main() -> int:
     (SESSION_DIR / "child-no-usage.jsonl").write_text(
         '{"type":"session","version":3,"id":"header-only-child-no-usage","timestamp":"2026-03-27T09:10:00.000Z","cwd":"/tmp/workspace"}\n'
     )
+    (SESSION_DIR / "child-from-prompt.jsonl").write_text(
+        '{"type":"session","version":3,"id":"child-from-prompt","timestamp":"2026-03-27T09:15:00.000Z","cwd":"/tmp/workspace"}\n'
+        '{"type":"message","id":"u1","timestamp":"2026-03-27T09:15:01.000Z","message":{"role":"user","content":[{"type":"text","text":"[Thu 2026-03-27 09:15 GMT+11] [Subagent Context] You are running as a subagent (depth 1/1).\\nRequester session: agent:sample-agent:discord:channel:123\\nRequester channel: discord\\nYour session: agent:sample-agent:subagent:prompt-only\\n\\n[Subagent Task]: prompt-only-subagent"}]}}\n'
+        '{"type":"message","id":"a1","timestamp":"2026-03-27T09:15:02.000Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.4","usage":{"input":400,"output":200,"cacheRead":0,"cacheWrite":0,"totalTokens":600,"cost":{"input":0.001,"output":0.001,"cacheRead":0.0,"cacheWrite":0.0,"total":0.002}},"content":[{"type":"text","text":"done"}]}}\n'
+    )
 
     summary = json.loads(run("summary", "--root", str(FIXTURE_ROOT), "--json"))
-    assert summary["rows"] == 3
+    assert summary["rows"] == 4
     assert summary["models"][0]["model"] == "gpt-5.4"
-    assert summary["models"][0]["total_tokens"] == 2500
-    assert summary["models"][0]["sessions"] == 1
+    assert summary["models"][0]["total_tokens"] == 3100
+    assert summary["models"][0]["sessions"] == 2
 
     current = json.loads(run("current", "--root", str(FIXTURE_ROOT), "--json"))
-    assert current["model"] == "kimi-k2.5:cloud"
+    assert current["model"] == "gpt-5.4"
     assert current["parent_session_id"] == "parent-session"
-    assert current["session_label"] == "sample-subagent-task"
+    assert current["session_label"] == "prompt-only-subagent"
 
     agents = json.loads(run("agents", "--root", str(FIXTURE_ROOT), "--json"))
     assert agents["agents"][0]["agent"] == "sample-agent"
-    assert agents["agents"][0]["sessions"] == 2
+    assert agents["agents"][0]["sessions"] == 3
 
     sessions = json.loads(run("sessions", "--root", str(FIXTURE_ROOT), "--json"))
-    assert len(sessions["sessions"]) == 3
+    assert len(sessions["sessions"]) == 4
     child = next(item for item in sessions["sessions"] if item["session_id"] == "child-session")
     assert child["parent_session_id"] == "parent-session"
     assert child["spawn_depth"] == 1
@@ -74,16 +79,20 @@ def main() -> int:
     assert metadata_only["parent_session_id"] == "parent-session"
     assert metadata_only["calls"] == 0
     assert metadata_only["started_at"] == "2026-03-27T09:10:00Z"
+    prompt_only = next(item for item in sessions["sessions"] if item["session_id"] == "child-from-prompt")
+    assert prompt_only["label"] == "prompt-only-subagent"
+    assert prompt_only["parent_session_id"] == "parent-session"
+    assert prompt_only["spawn_depth"] == 1
 
     subagents = json.loads(run("subagents", "--root", str(FIXTURE_ROOT), "--json"))
-    assert len(subagents["subagents"]) == 2
-    assert {item["session_id"] for item in subagents["subagents"]} == {"child-session", "child-no-usage"}
+    assert len(subagents["subagents"]) == 3
+    assert {item["session_id"] for item in subagents["subagents"]} == {"child-session", "child-no-usage", "child-from-prompt"}
 
     tree = json.loads(run("session-tree", "--root", str(FIXTURE_ROOT), "--json"))
     assert len(tree["trees"]) == 1
     assert tree["trees"][0]["session_id"] == "parent-session"
-    assert tree["trees"][0]["tree_total_tokens"] == 3100
-    assert {item["session_id"] for item in tree["trees"][0]["children"]} == {"child-session", "child-no-usage"}
+    assert tree["trees"][0]["tree_total_tokens"] == 3700
+    assert {item["session_id"] for item in tree["trees"][0]["children"]} == {"child-session", "child-no-usage", "child-from-prompt"}
 
     daily = json.loads(run("daily", "--root", str(FIXTURE_ROOT), "--json"))
     assert len(daily["daily"]) >= 2
