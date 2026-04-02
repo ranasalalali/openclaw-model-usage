@@ -2,6 +2,12 @@
 
 All notable changes to `openclaw-model-usage` will be documented in this file.
 
+## 1.2.1
+
+- clarify README and skill guidance so real dashboards use `~/.openclaw/agents` by default
+- explicitly mark `tests/fixtures_root` as development-only to avoid sending sample dashboards by mistake
+- align installed skill guidance with the shipped summary + dashboard workflow
+
 ## 1.2.0
 
 - add human-friendly `overview`, `top-agents`, and `top-sessions` commands on top of the session-aware backend

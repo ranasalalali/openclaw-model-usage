@@ -93,13 +93,18 @@ python3 scripts/model_usage.py dashboard --out dist/dashboard.html
 
 ## HTML dashboard
 
-Generate a local static dashboard:
+Generate a local static dashboard from your **real local OpenClaw logs**:
 
 ```bash
 uv run --project . openclaw-model-usage dashboard
-uv run --project . openclaw-model-usage dashboard --out dist/dashboard.html --title "OpenClaw Usage"
-python3 scripts/model_usage.py dashboard --root ~/.openclaw/agents --out dist/dashboard.html
+uv run --project . openclaw-model-usage dashboard --root ~/.openclaw/agents --out dist/dashboard.html --title "OpenClaw Usage"
+python3 scripts/model_usage.py dashboard --root ~/.openclaw/agents --out dist/dashboard.html --title "OpenClaw Usage Dashboard"
 ```
+
+Important:
+- the intended/default source is your real local log root: `~/.openclaw/agents`
+- do **not** use `tests/fixtures_root` for normal/operator usage
+- fixture roots are for development/testing only and will generate a sample/test dashboard, not your real usage dashboard
 
 Default output path:
 
@@ -157,6 +162,10 @@ See `references/discovery.md` for field inventory and reliability notes.
 python3 tests/smoke_test.py
 uv run --project . openclaw-model-usage --help
 ```
+
+Development note:
+- test fixtures under `tests/fixtures_root` are only for smoke tests and development validation
+- user-facing commands should point at real logs under `~/.openclaw/agents` unless you are intentionally testing against fixtures
 
 CI also checks:
 - CLI help

@@ -15,8 +15,10 @@ Use this skill when the user asks for:
 - usage summaries by provider/model
 - token totals by model
 - cost summaries by model when available
-- per-agent model usage
+- per-agent or per-session usage
+- session/subagent rollups
 - daily model usage summaries
+- a compact summary plus an optional HTML dashboard
 
 ## What it does
 
@@ -24,41 +26,48 @@ This skill provides a local-first replacement for external model-usage workflows
 
 It reads OpenClaw session logs directly and does not depend on CodexBar.
 
-## Script usage
+## Preferred usage
 
-Run the bundled script:
+Start with a short human-readable summary:
 
 ```bash
-python {baseDir}/scripts/model_usage.py current
-python {baseDir}/scripts/model_usage.py summary
-python {baseDir}/scripts/model_usage.py agents
-python {baseDir}/scripts/model_usage.py sessions
-python {baseDir}/scripts/model_usage.py subagents
-python {baseDir}/scripts/model_usage.py session-tree
-python {baseDir}/scripts/model_usage.py daily --limit 20
+python {baseDir}/scripts/model_usage.py
+python {baseDir}/scripts/model_usage.py overview
+python {baseDir}/scripts/model_usage.py top-agents
+python {baseDir}/scripts/model_usage.py top-sessions
 ```
+
+Generate the HTML dashboard from **real local logs** when the user wants a richer artifact:
+
+```bash
+python {baseDir}/scripts/model_usage.py dashboard --root ~/.openclaw/agents --out dist/dashboard.html --title "OpenClaw Usage Dashboard"
+```
+
+Recommended response pattern:
+- return a short human-readable summary first
+- optionally generate and attach the HTML dashboard for richer inspection on phone/desktop
 
 ## JSON output
 
 ```bash
-python {baseDir}/scripts/model_usage.py summary --json --pretty
-python {baseDir}/scripts/model_usage.py agents --json --pretty
+python {baseDir}/scripts/model_usage.py overview --json --pretty
+python {baseDir}/scripts/model_usage.py sessions --json --pretty
+python {baseDir}/scripts/model_usage.py subagents --json --pretty
 python {baseDir}/scripts/model_usage.py rows --limit 20 --json --pretty
 ```
 
 ## Inputs
 
-Default source:
+Default real source:
 
 ```bash
-~/.openclaw/agents/*/sessions/*.jsonl
+~/.openclaw/agents
 ```
 
-Override the root if needed:
-
-```bash
-python {baseDir}/scripts/model_usage.py summary --root /path/to/.openclaw/agents
-```
+Important:
+- use the real local OpenClaw log root for user-facing summaries and dashboards
+- do **not** use `tests/fixtures_root` unless you are intentionally running development tests
+- fixture roots generate sample/test output, not the user's real usage report
 
 ## References
 
