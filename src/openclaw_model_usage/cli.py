@@ -64,13 +64,38 @@ class UsageRow:
     cost_total_usd: float
 
 
+@dataclass
+class Totals:
+    calls: int
+    total_tokens: int
+    cost_total_usd: float
+    agents: int
+    sessions: int
+    models: int
+    first_timestamp: str | None
+    last_timestamp: str | None
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Summarize local OpenClaw model usage from session JSONL files.")
     p.add_argument(
         "command",
-        choices=["summary", "current", "recent", "rows", "agents", "daily", "sessions", "subagents", "session-tree"],
+        choices=[
+            "overview",
+            "summary",
+            "current",
+            "recent",
+            "rows",
+            "agents",
+            "top-agents",
+            "daily",
+            "sessions",
+            "top-sessions",
+            "subagents",
+            "session-tree",
+        ],
         nargs="?",
-        default="summary",
+        default="overview",
     )
     p.add_argument("--root", default=str(DEFAULT_ROOT), help="OpenClaw agents root (default: ~/.openclaw/agents)")
     p.add_argument("--agent", action="append", help="Limit to one or more agents")
@@ -79,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session-id", action="append", help="Limit to one or more session IDs")
     p.add_argument("--channel", action="append", help="Limit to one or more channels")
     p.add_argument("--since-days", type=int, default=30, help="Look back N days (default: 30, 0 = all)")
-    p.add_argument("--limit", type=int, default=10, help="Limit rows for recent/rows/daily/session listings")
+    p.add_argument("--limit", type=int, default=5, help="Limit rows for top/recent/daily/session listings (default: 5)")
     p.add_argument("--json", action="store_true", help="Emit JSON output")
     p.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     return p
@@ -383,18 +408,20 @@ def load_rows(
 
 
 def summarise_by_model(rows: list[UsageRow]) -> dict[str, Any]:
-    by_model: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {
-        "calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "total_tokens": 0,
-        "cost_total_usd": 0.0,
-        "agents": set(),
-        "sessions": set(),
-        "last_timestamp": None,
-    })
+    by_model: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 0,
+            "cost_total_usd": 0.0,
+            "agents": set(),
+            "sessions": set(),
+            "last_timestamp": None,
+        }
+    )
     for row in rows:
         item = by_model[(row.provider, row.model)]
         item["calls"] += 1
@@ -409,32 +436,36 @@ def summarise_by_model(rows: list[UsageRow]) -> dict[str, Any]:
         item["last_timestamp"] = row.timestamp
     models_out = []
     for (provider, model), item in sorted(by_model.items(), key=lambda kv: kv[1]["cost_total_usd"], reverse=True):
-        models_out.append({
-            "provider": provider,
-            "model": model,
-            "calls": item["calls"],
-            "input_tokens": item["input_tokens"],
-            "output_tokens": item["output_tokens"],
-            "cache_read_tokens": item["cache_read_tokens"],
-            "cache_write_tokens": item["cache_write_tokens"],
-            "total_tokens": item["total_tokens"],
-            "cost_total_usd": round(item["cost_total_usd"], 6),
-            "agents": sorted(item["agents"]),
-            "sessions": len(item["sessions"]),
-            "last_timestamp": item["last_timestamp"],
-        })
+        models_out.append(
+            {
+                "provider": provider,
+                "model": model,
+                "calls": item["calls"],
+                "input_tokens": item["input_tokens"],
+                "output_tokens": item["output_tokens"],
+                "cache_read_tokens": item["cache_read_tokens"],
+                "cache_write_tokens": item["cache_write_tokens"],
+                "total_tokens": item["total_tokens"],
+                "cost_total_usd": round(item["cost_total_usd"], 6),
+                "agents": sorted(item["agents"]),
+                "sessions": len(item["sessions"]),
+                "last_timestamp": item["last_timestamp"],
+            }
+        )
     return {"rows": len(rows), "models": models_out}
 
 
 def summarise_by_agent(rows: list[UsageRow]) -> dict[str, Any]:
-    by_agent: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "calls": 0,
-        "total_tokens": 0,
-        "cost_total_usd": 0.0,
-        "models": set(),
-        "sessions": set(),
-        "last_timestamp": None,
-    })
+    by_agent: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "calls": 0,
+            "total_tokens": 0,
+            "cost_total_usd": 0.0,
+            "models": set(),
+            "sessions": set(),
+            "last_timestamp": None,
+        }
+    )
     for row in rows:
         item = by_agent[row.agent]
         item["calls"] += 1
@@ -445,15 +476,17 @@ def summarise_by_agent(rows: list[UsageRow]) -> dict[str, Any]:
         item["last_timestamp"] = row.timestamp
     agents_out = []
     for agent, item in sorted(by_agent.items(), key=lambda kv: kv[1]["cost_total_usd"], reverse=True):
-        agents_out.append({
-            "agent": agent,
-            "calls": item["calls"],
-            "sessions": len(item["sessions"]),
-            "total_tokens": item["total_tokens"],
-            "cost_total_usd": round(item["cost_total_usd"], 6),
-            "models": sorted(item["models"]),
-            "last_timestamp": item["last_timestamp"],
-        })
+        agents_out.append(
+            {
+                "agent": agent,
+                "calls": item["calls"],
+                "sessions": len(item["sessions"]),
+                "total_tokens": item["total_tokens"],
+                "cost_total_usd": round(item["cost_total_usd"], 6),
+                "models": sorted(item["models"]),
+                "last_timestamp": item["last_timestamp"],
+            }
+        )
     return {"rows": len(rows), "agents": agents_out}
 
 
@@ -467,26 +500,30 @@ def summarise_daily(rows: list[UsageRow]) -> dict[str, Any]:
         item["cost_total_usd"] += row.cost_total_usd
     daily_out = []
     for (day, provider, model), item in sorted(by_day.items(), key=lambda kv: (kv[0][0], kv[1]["cost_total_usd"]), reverse=True):
-        daily_out.append({
-            "date": day,
-            "provider": provider,
-            "model": model,
-            "calls": item["calls"],
-            "total_tokens": item["total_tokens"],
-            "cost_total_usd": round(item["cost_total_usd"], 6),
-        })
+        daily_out.append(
+            {
+                "date": day,
+                "provider": provider,
+                "model": model,
+                "calls": item["calls"],
+                "total_tokens": item["total_tokens"],
+                "cost_total_usd": round(item["cost_total_usd"], 6),
+            }
+        )
     return {"rows": len(rows), "daily": daily_out}
 
 
 def summarise_by_session(rows: list[UsageRow], session_meta: dict[tuple[str, str], SessionMeta]) -> dict[str, Any]:
-    by_session: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {
-        "calls": 0,
-        "total_tokens": 0,
-        "cost_total_usd": 0.0,
-        "models": set(),
-        "first_timestamp": None,
-        "last_timestamp": None,
-    })
+    by_session: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {
+            "calls": 0,
+            "total_tokens": 0,
+            "cost_total_usd": 0.0,
+            "models": set(),
+            "first_timestamp": None,
+            "last_timestamp": None,
+        }
+    )
     for row in rows:
         key = (row.agent, row.session_id)
         item = by_session[key]
@@ -499,10 +536,16 @@ def summarise_by_session(rows: list[UsageRow], session_meta: dict[tuple[str, str
 
     all_keys = set(by_session) | set(session_meta)
     sessions_out = []
-    for key in sorted(all_keys, key=lambda k: (
-        by_session.get(k, {}).get("cost_total_usd", 0.0),
-        by_session.get(k, {}).get("last_timestamp") or (session_meta.get(k).updated_at if session_meta.get(k) else "") or (session_meta.get(k).started_at if session_meta.get(k) else ""),
-    ), reverse=True):
+    for key in sorted(
+        all_keys,
+        key=lambda k: (
+            by_session.get(k, {}).get("cost_total_usd", 0.0),
+            by_session.get(k, {}).get("last_timestamp")
+            or (session_meta.get(k).updated_at if session_meta.get(k) else "")
+            or (session_meta.get(k).started_at if session_meta.get(k) else ""),
+        ),
+        reverse=True,
+    ):
         item = by_session.get(key) or {
             "calls": 0,
             "total_tokens": 0,
@@ -512,24 +555,26 @@ def summarise_by_session(rows: list[UsageRow], session_meta: dict[tuple[str, str
             "last_timestamp": None,
         }
         meta = session_meta.get(key) or SessionMeta(agent=key[0], session_id=key[1])
-        sessions_out.append({
-            "agent": key[0],
-            "session_id": key[1],
-            "session_key": meta.session_key,
-            "label": meta.label or meta.display_name,
-            "channel": meta.channel,
-            "spawn_depth": meta.spawn_depth,
-            "subagent_role": meta.subagent_role,
-            "parent_session_key": meta.spawned_by,
-            "parent_session_id": meta.spawned_by_session_id,
-            "calls": item["calls"],
-            "total_tokens": item["total_tokens"],
-            "cost_total_usd": round(item["cost_total_usd"], 6),
-            "models": sorted(item["models"]),
-            "started_at": meta.started_at or item["first_timestamp"],
-            "last_timestamp": item["last_timestamp"] or meta.updated_at or meta.started_at,
-            "status": meta.status,
-        })
+        sessions_out.append(
+            {
+                "agent": key[0],
+                "session_id": key[1],
+                "session_key": meta.session_key,
+                "label": meta.label or meta.display_name,
+                "channel": meta.channel,
+                "spawn_depth": meta.spawn_depth,
+                "subagent_role": meta.subagent_role,
+                "parent_session_key": meta.spawned_by,
+                "parent_session_id": meta.spawned_by_session_id,
+                "calls": item["calls"],
+                "total_tokens": item["total_tokens"],
+                "cost_total_usd": round(item["cost_total_usd"], 6),
+                "models": sorted(item["models"]),
+                "started_at": meta.started_at or item["first_timestamp"],
+                "last_timestamp": item["last_timestamp"] or meta.updated_at or meta.started_at,
+                "status": meta.status,
+            }
+        )
     return {"rows": len(rows), "sessions": sessions_out}
 
 
@@ -571,28 +616,133 @@ def summarise_session_tree(rows: list[UsageRow], session_meta: dict[tuple[str, s
     return {"rows": len(rows), "trees": roots}
 
 
+def compute_totals(rows: list[UsageRow]) -> Totals:
+    return Totals(
+        calls=len(rows),
+        total_tokens=sum(row.total_tokens for row in rows),
+        cost_total_usd=round(sum(row.cost_total_usd for row in rows), 6),
+        agents=len({row.agent for row in rows}),
+        sessions=len({row.session_id for row in rows}),
+        models=len({(row.provider, row.model) for row in rows}),
+        first_timestamp=rows[0].timestamp if rows else None,
+        last_timestamp=rows[-1].timestamp if rows else None,
+    )
+
+
+def build_overview(rows: list[UsageRow], session_meta: dict[tuple[str, str], SessionMeta], limit: int) -> dict[str, Any]:
+    totals = compute_totals(rows)
+    by_model = summarise_by_model(rows)
+    by_agent = summarise_by_agent(rows)
+    by_session = summarise_by_session(rows, session_meta)
+    current = asdict(rows[-1]) if rows else None
+    return {
+        "rows": len(rows),
+        "totals": asdict(totals),
+        "current": current,
+        "top_models": by_model["models"][:limit],
+        "top_agents": by_agent["agents"][:limit],
+        "top_sessions": by_session["sessions"][:limit],
+    }
+
+
 def fmt_money(value: float) -> str:
     return f"${value:,.4f}"
 
 
-def render_text_summary(data: dict[str, Any]) -> str:
-    lines = [f"Usage records: {data['rows']}", "Models:"]
-    for item in data["models"]:
-        lines.append(f"- {item['provider']} / {item['model']}: {fmt_money(item['cost_total_usd'])}, {item['total_tokens']:,} tokens, {item['calls']} calls across {item['sessions']} sessions")
+def fmt_tokens(value: int) -> str:
+    return f"{value:,} tok"
+
+
+def compact_model_name(provider: str, model: str) -> str:
+    return f"{provider}/{model}"
+
+
+def compact_session_name(item: dict[str, Any]) -> str:
+    bits = [item["session_id"]]
+    if item.get("label"):
+        bits.append(item["label"])
+    if item.get("parent_session_id"):
+        bits.append(f"parent {item['parent_session_id']}")
+    if item.get("spawn_depth") is not None:
+        bits.append(f"depth {item['spawn_depth']}")
+    return " | ".join(bits)
+
+
+def render_ranked(items: list[tuple[str, str]], empty: str = "(none)") -> str:
+    if not items:
+        return empty
+    return "\n".join(f"{idx}. {left} — {right}" for idx, (left, right) in enumerate(items, 1))
+
+
+def render_text_summary(data: dict[str, Any], limit: int) -> str:
+    totals = data["totals"]
+    header = f"Usage overview — {fmt_money(totals['cost_total_usd'])}, {fmt_tokens(totals['total_tokens'])}, {totals['calls']} calls"
+    scope = f"Agents {totals['agents']} | Sessions {totals['sessions']} | Models {totals['models']}"
+    lines = [header, scope]
+    current = data.get("current")
+    if current:
+        label = f" | {current['session_label']}" if current.get("session_label") else ""
+        lines.append(f"Current: {compact_model_name(current['provider'], current['model'])} | {current['agent']} | {current['session_id']}{label}")
+
+    lines.append("")
+    lines.append("Top agents")
+    lines.append(
+        render_ranked(
+            [
+                (item["agent"], f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['sessions']} sessions")
+                for item in data["top_agents"][:limit]
+            ]
+        )
+    )
+    lines.append("")
+    lines.append("Top sessions")
+    lines.append(
+        render_ranked(
+            [
+                (compact_session_name(item), f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['calls']} calls")
+                for item in data["top_sessions"][:limit]
+            ]
+        )
+    )
+    lines.append("")
+    lines.append("Top models")
+    lines.append(
+        render_ranked(
+            [
+                (compact_model_name(item["provider"], item["model"]), f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['calls']} calls")
+                for item in data["top_models"][:limit]
+            ]
+        )
+    )
     return "\n".join(lines)
 
 
-def render_text_agents(data: dict[str, Any]) -> str:
-    lines = [f"Usage records: {data['rows']}", "Agents:"]
-    for item in data["agents"]:
-        lines.append(f"- {item['agent']}: {fmt_money(item['cost_total_usd'])}, {item['total_tokens']:,} tokens, {item['calls']} calls across {item['sessions']} sessions")
+def render_text_agents(data: dict[str, Any], limit: int) -> str:
+    totals = compute_totals_from_collection(data["agents"], key_name="agent")
+    lines = [f"Top agents — {len(data['agents'])} total"]
+    if totals:
+        lines.append(f"Shown by cost. Combined: {fmt_money(totals['cost_total_usd'])}, {fmt_tokens(totals['total_tokens'])}, {totals['sessions']} sessions")
+    lines.append(
+        render_ranked(
+            [
+                (item["agent"], f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['calls']} calls, {item['sessions']} sessions")
+                for item in data["agents"][:limit]
+            ]
+        )
+    )
     return "\n".join(lines)
 
 
 def render_text_daily(data: dict[str, Any], limit: int) -> str:
-    lines = [f"Usage records: {data['rows']}", "Daily:"]
-    for item in data["daily"][:limit]:
-        lines.append(f"- {item['date']} | {item['provider']}/{item['model']}: {fmt_money(item['cost_total_usd'])}, {item['total_tokens']:,} tokens, {item['calls']} calls")
+    lines = [f"Daily usage — showing {min(limit, len(data['daily']))} of {len(data['daily'])}"]
+    lines.append(
+        render_ranked(
+            [
+                (f"{item['date']} | {compact_model_name(item['provider'], item['model'])}", f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['calls']} calls")
+                for item in data["daily"][:limit]
+            ]
+        )
+    )
     return "\n".join(lines)
 
 
@@ -600,38 +750,59 @@ def render_text_current(rows: list[UsageRow]) -> str:
     if not rows:
         return "No usage rows found."
     row = rows[-1]
-    extra = f"\nSession: {row.session_id}"
+    parts = [
+        f"Current model: {compact_model_name(row.provider, row.model)}",
+        f"Agent: {row.agent}",
+        f"Session: {row.session_id}",
+    ]
     if row.session_label:
-        extra += f"\nLabel: {row.session_label}"
+        parts.append(f"Label: {row.session_label}")
     if row.parent_session_id:
-        extra += f"\nParent session: {row.parent_session_id}"
-    return "\n".join([f"Current model: {row.provider} / {row.model}", f"Agent: {row.agent}", f"Timestamp: {row.timestamp}", f"Tokens: {row.total_tokens:,}", f"Cost: {fmt_money(row.cost_total_usd)}"]) + extra
+        parts.append(f"Parent session: {row.parent_session_id}")
+    parts.extend([f"Timestamp: {row.timestamp}", f"Tokens: {fmt_tokens(row.total_tokens)}", f"Cost: {fmt_money(row.cost_total_usd)}"])
+    return "\n".join(parts)
 
 
 def render_text_recent(rows: list[UsageRow], limit: int) -> str:
-    lines = []
-    for row in rows[-limit:][::-1]:
-        label = f" [{row.session_label}]" if row.session_label else ""
-        lines.append(f"- {row.timestamp} | {row.agent} | {row.session_id}{label} | {row.provider}/{row.model} | {row.total_tokens:,} tokens | {fmt_money(row.cost_total_usd)}")
-    return "\n".join(lines) if lines else "No usage rows found."
+    if not rows:
+        return "No usage rows found."
+    return render_ranked(
+        [
+            (
+                f"{row.timestamp} | {row.agent} | {row.session_id}" + (f" | {row.session_label}" if row.session_label else ""),
+                f"{compact_model_name(row.provider, row.model)}, {fmt_tokens(row.total_tokens)}, {fmt_money(row.cost_total_usd)}",
+            )
+            for row in rows[-limit:][::-1]
+        ]
+    )
 
 
-def render_text_sessions(data: dict[str, Any], limit: int, key: str = "sessions") -> str:
+def render_text_sessions(data: dict[str, Any], limit: int, key: str = "sessions", title: str | None = None) -> str:
     items = data[key][:limit]
-    heading = "Subagents:" if key == "subagents" else "Sessions:"
-    lines = [f"Usage records: {data['rows']}", heading]
-    for item in items:
-        label = f" | {item['label']}" if item.get('label') else ""
-        parent = f" | parent {item['parent_session_id']}" if item.get('parent_session_id') else ""
-        depth = f" | depth {item['spawn_depth']}" if item.get('spawn_depth') is not None else ""
-        lines.append(f"- {item['agent']} | {item['session_id']}{label}{parent}{depth}: {fmt_money(item['cost_total_usd'])}, {item['total_tokens']:,} tokens, {item['calls']} calls")
+    heading = title or ("Top subagents" if key == "subagents" else "Top sessions")
+    lines = [f"{heading} — showing {len(items)} of {len(data[key])}"]
+    lines.append(
+        render_ranked(
+            [
+                (
+                    f"{item['agent']} | {compact_session_name(item)}",
+                    f"{fmt_money(item['cost_total_usd'])}, {fmt_tokens(item['total_tokens'])}, {item['calls']} calls",
+                )
+                for item in items
+            ]
+        )
+    )
     return "\n".join(lines)
 
 
 def render_tree_node(node: dict[str, Any], depth: int = 0) -> list[str]:
     indent = "  " * depth
     label = f" [{node['label']}]" if node.get("label") else ""
-    line = f"{indent}- {node['agent']} | {node['session_id']}{label} | direct {fmt_money(node['cost_total_usd'])}/{node['total_tokens']:,} tok | tree {fmt_money(node['tree_cost_total_usd'])}/{node['tree_total_tokens']:,} tok"
+    line = (
+        f"{indent}- {node['agent']} | {node['session_id']}{label} | "
+        f"direct {fmt_money(node['cost_total_usd'])}/{fmt_tokens(node['total_tokens'])} | "
+        f"tree {fmt_money(node['tree_cost_total_usd'])}/{fmt_tokens(node['tree_total_tokens'])}"
+    )
     lines = [line]
     for child in node["children"]:
         lines.extend(render_tree_node(child, depth + 1))
@@ -639,10 +810,21 @@ def render_tree_node(node: dict[str, Any], depth: int = 0) -> list[str]:
 
 
 def render_text_session_tree(data: dict[str, Any], limit: int) -> str:
-    lines = [f"Usage records: {data['rows']}", "Session trees:"]
+    lines = [f"Session trees — showing {min(limit, len(data['trees']))} of {len(data['trees'])}"]
     for root in data["trees"][:limit]:
         lines.extend(render_tree_node(root))
     return "\n".join(lines)
+
+
+def compute_totals_from_collection(items: list[dict[str, Any]], key_name: str) -> dict[str, Any] | None:
+    if not items:
+        return None
+    return {
+        key_name + "s": len(items),
+        "cost_total_usd": round(sum(float(item.get("cost_total_usd") or 0.0) for item in items), 6),
+        "total_tokens": sum(int(item.get("total_tokens") or 0) for item in items),
+        "sessions": sum(int(item.get("sessions") or 0) for item in items),
+    }
 
 
 def main() -> int:
@@ -658,13 +840,13 @@ def main() -> int:
     )
 
     command = args.command
-    if command == "summary":
-        payload: Any = summarise_by_model(rows)
-    elif command == "agents":
+    if command in {"overview", "summary"}:
+        payload: Any = build_overview(rows, session_meta, args.limit)
+    elif command in {"agents", "top-agents"}:
         payload = summarise_by_agent(rows)
     elif command == "daily":
         payload = summarise_daily(rows)
-    elif command == "sessions":
+    elif command in {"sessions", "top-sessions"}:
         payload = summarise_by_session(rows, session_meta)
     elif command == "subagents":
         payload = summarise_subagents(rows, session_meta)
@@ -683,16 +865,16 @@ def main() -> int:
         print(json.dumps(payload, indent=2 if args.pretty else None))
         return 0
 
-    if command == "summary":
-        print(render_text_summary(payload))
-    elif command == "agents":
-        print(render_text_agents(payload))
+    if command in {"overview", "summary"}:
+        print(render_text_summary(payload, args.limit))
+    elif command in {"agents", "top-agents"}:
+        print(render_text_agents(payload, args.limit))
     elif command == "daily":
         print(render_text_daily(payload, args.limit))
-    elif command == "sessions":
+    elif command in {"sessions", "top-sessions"}:
         print(render_text_sessions(payload, args.limit))
     elif command == "subagents":
-        print(render_text_sessions(payload, args.limit, key="subagents"))
+        print(render_text_sessions(payload, args.limit, key="subagents", title="Top subagents"))
     elif command == "session-tree":
         print(render_text_session_tree(payload, args.limit))
     elif command == "current":

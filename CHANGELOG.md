@@ -2,6 +2,13 @@
 
 All notable changes to `openclaw-model-usage` will be documented in this file.
 
+## Unreleased
+
+- add human-friendly `overview`, `top-agents`, and `top-sessions` commands on top of the session-aware backend
+- make the default non-JSON output compact and ranked for operator/chat use while preserving JSON output for scripting
+- expand smoke coverage for the new summary UX and aliases
+- refresh README examples toward the new default workflow
+
 ## 1.1.0
 
 - add Phase 1 session-aware attribution by joining usage rows with OpenClaw session metadata
