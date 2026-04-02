@@ -113,7 +113,7 @@ The report is self-contained and includes:
 - top agents
 - top models
 - top sessions with friendlier session names when metadata exists
-- recent daily cost trend with a static line + histogram hybrid chart
+- recent daily cost trend with a simple mobile-friendly daily cost bar chart, with calls/tokens kept as supporting detail
 - recent assistant usage rows with better session labels
 
 ## Useful filters
