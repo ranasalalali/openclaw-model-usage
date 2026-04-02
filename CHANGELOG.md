@@ -8,6 +8,8 @@ All notable changes to `openclaw-model-usage` will be documented in this file.
 - make the default non-JSON output compact and ranked for operator/chat use while preserving JSON output for scripting
 - expand smoke coverage for the new summary UX and aliases
 - refresh README examples toward the new default workflow
+- add a local-first `dashboard` command that writes a responsive self-contained HTML usage report
+- cover dashboard generation in the smoke test
 
 ## 1.1.0
 

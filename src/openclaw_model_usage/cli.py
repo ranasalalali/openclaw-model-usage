@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 from collections import defaultdict
@@ -93,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
             "top-sessions",
             "subagents",
             "session-tree",
+            "dashboard",
         ],
         nargs="?",
         default="overview",
@@ -107,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=5, help="Limit rows for top/recent/daily/session listings (default: 5)")
     p.add_argument("--json", action="store_true", help="Emit JSON output")
     p.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    p.add_argument("--out", help="Output path for generated dashboard HTML")
+    p.add_argument("--title", default="OpenClaw Model Usage Dashboard", help="Dashboard title for HTML output")
     return p
 
 
@@ -645,12 +649,32 @@ def build_overview(rows: list[UsageRow], session_meta: dict[tuple[str, str], Ses
     }
 
 
+def build_dashboard_payload(rows: list[UsageRow], session_meta: dict[tuple[str, str], SessionMeta], limit: int) -> dict[str, Any]:
+    return {
+        "overview": build_overview(rows, session_meta, limit),
+        "daily": summarise_daily(rows)["daily"],
+        "recent": [asdict(row) for row in rows[-limit:][::-1]],
+    }
+
+
 def fmt_money(value: float) -> str:
     return f"${value:,.4f}"
 
 
 def fmt_tokens(value: int) -> str:
     return f"{value:,} tok"
+
+
+def fmt_number(value: int | float) -> str:
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:,.2f}"
+    return f"{int(value):,}"
+
+
+def fmt_timestamp(value: str | None) -> str:
+    if not value:
+        return "—"
+    return value.replace("T", " ").replace("Z", " UTC")
 
 
 def compact_model_name(provider: str, model: str) -> str:
@@ -827,6 +851,215 @@ def compute_totals_from_collection(items: list[dict[str, Any]], key_name: str) -
     }
 
 
+def mini_bar_svg(values: list[float]) -> str:
+    if not values:
+        return '<div class="empty-state">No recent trend data.</div>'
+    width = 100
+    height = 36
+    step = width / max(len(values), 1)
+    max_value = max(values) or 1
+    bars = []
+    for idx, value in enumerate(values):
+        bar_height = max(2.0, (value / max_value) * (height - 6)) if value > 0 else 2.0
+        x = idx * step + 1
+        y = height - bar_height - 2
+        bar_width = max(3.0, step - 2)
+        bars.append(
+            f'<rect x="{x:.2f}" y="{y:.2f}" width="{bar_width:.2f}" height="{bar_height:.2f}" rx="2" fill="rgba(110, 231, 183, 0.18)" stroke="#6ee7b7" stroke-width="1" />'
+        )
+    return f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" aria-hidden="true">{"".join(bars)}</svg>'
+
+
+def render_dashboard_table(headers: list[str], rows: list[list[str]], empty: str = "No data.") -> str:
+    if not rows:
+        return f'<div class="empty-state">{html.escape(empty)}</div>'
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
+    body_rows = ["<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows]
+    return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{"".join(body_rows)}</tbody></table></div>'
+
+
+def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
+    overview = data["overview"]
+    totals = overview["totals"]
+    current = overview.get("current")
+    top_agents = overview["top_agents"][:limit]
+    top_sessions = overview["top_sessions"][:limit]
+    top_models = overview["top_models"][:limit]
+    recent = data["recent"][:limit]
+
+    day_totals: dict[str, dict[str, float | int]] = {}
+    for item in data["daily"]:
+        entry = day_totals.setdefault(item["date"], {"cost_total_usd": 0.0, "total_tokens": 0, "calls": 0})
+        entry["cost_total_usd"] = float(entry["cost_total_usd"]) + float(item.get("cost_total_usd") or 0.0)
+        entry["total_tokens"] = int(entry["total_tokens"]) + int(item.get("total_tokens") or 0)
+        entry["calls"] = int(entry["calls"]) + int(item.get("calls") or 0)
+    recent_days = sorted(day_totals.items())[-7:]
+
+    cards = [
+        ("Total cost", fmt_money(float(totals["cost_total_usd"])), f"{totals['calls']} calls"),
+        ("Total tokens", fmt_number(int(totals["total_tokens"])), f"Across {totals['models']} models"),
+        ("Sessions", fmt_number(int(totals["sessions"])), f"{totals['agents']} agents"),
+        ("Window", fmt_timestamp(totals.get("first_timestamp")), f"to {fmt_timestamp(totals.get('last_timestamp'))}"),
+    ]
+    cards_html = "".join(
+        f'<article class="stat-card"><span class="eyebrow">{html.escape(label)}</span><strong>{html.escape(value)}</strong><span class="muted">{html.escape(sub)}</span></article>'
+        for label, value, sub in cards
+    )
+
+    current_html = '<div class="empty-state">No current usage row found.</div>'
+    if current:
+        current_html = "".join(
+            [
+                '<div class="current-grid">',
+                f'<div><span class="eyebrow">Current model</span><strong>{html.escape(compact_model_name(current["provider"], current["model"]))}</strong></div>',
+                f'<div><span class="eyebrow">Agent</span><strong>{html.escape(current["agent"])}</strong></div>',
+                f'<div><span class="eyebrow">Session</span><strong>{html.escape(current["session_id"])}</strong></div>',
+                f'<div><span class="eyebrow">Last activity</span><strong>{html.escape(fmt_timestamp(current["timestamp"]))}</strong></div>',
+                '</div>',
+            ]
+        )
+
+    agents_table = render_dashboard_table(
+        ["Agent", "Cost", "Tokens", "Calls", "Sessions", "Last activity"],
+        [
+            [
+                html.escape(item["agent"]),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                fmt_number(item["sessions"]),
+                html.escape(fmt_timestamp(item.get("last_timestamp"))),
+            ]
+            for item in top_agents
+        ],
+        empty="No agent data.",
+    )
+    sessions_table = render_dashboard_table(
+        ["Session", "Agent", "Cost", "Tokens", "Calls", "Status"],
+        [
+            [
+                html.escape(item.get("label") or item["session_id"]),
+                html.escape(item["agent"]),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                html.escape(item.get("status") or "—"),
+            ]
+            for item in top_sessions
+        ],
+        empty="No session data.",
+    )
+    models_table = render_dashboard_table(
+        ["Model", "Cost", "Tokens", "Calls", "Agents", "Sessions"],
+        [
+            [
+                html.escape(compact_model_name(item["provider"], item["model"])),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                fmt_number(len(item.get("agents") or [])),
+                fmt_number(item["sessions"]),
+            ]
+            for item in top_models
+        ],
+        empty="No model data.",
+    )
+    recent_table = render_dashboard_table(
+        ["When", "Agent", "Session", "Model", "Tokens", "Cost"],
+        [
+            [
+                html.escape(fmt_timestamp(item["timestamp"])),
+                html.escape(item["agent"]),
+                html.escape(item.get("session_label") or item["session_id"]),
+                html.escape(compact_model_name(item["provider"], item["model"])),
+                fmt_number(item["total_tokens"]),
+                fmt_money(item["cost_total_usd"]),
+            ]
+            for item in recent
+        ],
+        empty="No recent activity.",
+    )
+
+    trend_cards = "".join(
+        f'<div class="trend-day"><div class="trend-day-header"><strong>{html.escape(day)}</strong><span>{fmt_money(float(vals["cost_total_usd"]))}</span></div><div class="trend-metrics"><span>{fmt_number(int(vals["total_tokens"]))} tok</span><span>{fmt_number(int(vals["calls"]))} calls</span></div></div>'
+        for day, vals in reversed(recent_days)
+    ) or '<div class="empty-state">No daily trend data.</div>'
+    spark = mini_bar_svg([float(vals["cost_total_usd"]) for _, vals in recent_days])
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: dark; --bg:#07111f; --panel:#0f1b2d; --text:#ecf3ff; --muted:#9bb0cb; --accent:#6ee7b7; --border:rgba(255,255,255,.08); }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; background: radial-gradient(circle at top, #15314f 0%, var(--bg) 38%, #030712 100%); color:var(--text); }}
+    .page {{ max-width:1180px; margin:0 auto; padding:24px 16px 48px; }}
+    .hero {{ display:grid; gap:16px; grid-template-columns:1.5fr 1fr; margin-bottom:18px; }}
+    .panel {{ background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); border:1px solid var(--border); border-radius:20px; padding:18px; box-shadow:0 12px 40px rgba(0,0,0,.25); }}
+    h1,h2,p {{ margin:0; }}
+    .hero h1 {{ font-size:clamp(1.8rem, 4vw, 3rem); line-height:1.05; margin-bottom:10px; }}
+    .eyebrow {{ display:block; text-transform:uppercase; letter-spacing:.12em; color:var(--accent); font-size:.72rem; margin-bottom:8px; }}
+    .muted {{ color:var(--muted); }}
+    .meta {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; color:var(--muted); font-size:.95rem; }}
+    .stats {{ display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; margin-bottom:18px; }}
+    .stat-card strong {{ display:block; font-size:clamp(1.3rem, 3vw, 2rem); margin-bottom:8px; }}
+    .section-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; margin-bottom:14px; }}
+    .table-wrap {{ overflow:auto; margin-top:12px; }}
+    table {{ width:100%; border-collapse:collapse; min-width:520px; }}
+    th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); font-size:.94rem; }}
+    th {{ color:var(--muted); font-weight:600; background:rgba(15,27,45,.96); }}
+    .current-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin-top:12px; }}
+    .trend-box {{ display:grid; gap:12px; }}
+    .trend-chart {{ height:120px; padding:8px; border-radius:16px; background:rgba(255,255,255,.03); border:1px solid var(--border); }}
+    .trend-chart svg {{ width:100%; height:100%; }}
+    .trend-days {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; }}
+    .trend-day {{ padding:12px; border-radius:14px; background:rgba(255,255,255,.03); border:1px solid var(--border); }}
+    .trend-day-header, .trend-metrics {{ display:flex; justify-content:space-between; gap:8px; }}
+    .trend-metrics {{ margin-top:8px; color:var(--muted); font-size:.88rem; }}
+    .empty-state {{ padding:18px; border:1px dashed var(--border); border-radius:14px; color:var(--muted); text-align:center; margin-top:10px; }}
+    .footer {{ margin-top:18px; color:var(--muted); font-size:.85rem; }}
+    @media (max-width: 820px) {{ .hero, .section-grid, .stats, .current-grid {{ grid-template-columns:1fr; }} .page {{ padding:16px 12px 36px; }} .panel {{ border-radius:16px; }} table {{ min-width:460px; }} }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <article class="panel">
+        <span class="eyebrow">OpenClaw model usage</span>
+        <h1>{html.escape(title)}</h1>
+        <p class="muted">Local-first static dashboard generated from session logs. No server. No browser drama. Just a portable report.</p>
+        <div class="meta">
+          <span>{fmt_number(totals['calls'])} calls</span>
+          <span>{fmt_number(totals['sessions'])} sessions</span>
+          <span>{fmt_number(totals['agents'])} agents</span>
+          <span>{fmt_number(totals['models'])} models</span>
+        </div>
+      </article>
+      <article class="panel">
+        <span class="eyebrow">Current context</span>
+        <h2>Latest activity</h2>
+        {current_html}
+      </article>
+    </section>
+    <section class="stats">{cards_html}</section>
+    <section class="section-grid">
+      <article class="panel"><span class="eyebrow">Top agents</span><h2>Who is spending the budget</h2>{agents_table}</article>
+      <article class="panel"><span class="eyebrow">Top models</span><h2>Which models are doing the work</h2>{models_table}</article>
+    </section>
+    <section class="section-grid">
+      <article class="panel"><span class="eyebrow">Top sessions</span><h2>Most expensive sessions</h2>{sessions_table}</article>
+      <article class="panel"><span class="eyebrow">Daily trend</span><h2>Recent cost pulse</h2><div class="trend-box"><div class="trend-chart">{spark}</div><div class="trend-days">{trend_cards}</div></div></article>
+    </section>
+    <section class="panel"><span class="eyebrow">Recent activity</span><h2>Latest assistant usage rows</h2>{recent_table}</section>
+    <p class="footer">Generated locally by openclaw-model-usage. Self-contained HTML output for easy sharing or opening on your phone.</p>
+  </main>
+</body>
+</html>'''
+
+
 def main() -> int:
     args = build_parser().parse_args()
     rows, session_meta = load_rows(
@@ -858,8 +1091,20 @@ def main() -> int:
         payload = [asdict(r) for r in rows[-args.limit:][::-1]]
     elif command == "rows":
         payload = [asdict(r) for r in rows[-args.limit:]]
+    elif command == "dashboard":
+        payload = build_dashboard_payload(rows, session_meta, args.limit)
     else:
         raise AssertionError("unexpected command")
+
+    if command == "dashboard":
+        output_path = Path(args.out).expanduser() if args.out else Path("dist") / "dashboard.html"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(render_dashboard_html(payload, args.title, args.limit), encoding="utf-8")
+        if args.json:
+            print(json.dumps({"output": str(output_path.resolve()), "title": args.title, "rows": payload["overview"]["rows"]}, indent=2 if args.pretty else None))
+        else:
+            print(f"Wrote dashboard HTML to {output_path.resolve()}")
+        return 0
 
     if args.json:
         print(json.dumps(payload, indent=2 if args.pretty else None))

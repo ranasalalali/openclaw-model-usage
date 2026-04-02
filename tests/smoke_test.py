@@ -112,6 +112,18 @@ def main() -> int:
     daily = json.loads(run("daily", "--root", str(FIXTURE_ROOT), "--json"))
     assert len(daily["daily"]) >= 2
 
+    dashboard_path = ROOT / "dist" / "test-dashboard.html"
+    if dashboard_path.exists():
+        dashboard_path.unlink()
+    dashboard_result = json.loads(run("dashboard", "--root", str(FIXTURE_ROOT), "--out", str(dashboard_path), "--title", "Fixture Dashboard", "--json"))
+    assert dashboard_result["output"] == str(dashboard_path.resolve())
+    dashboard_html = dashboard_path.read_text()
+    assert "Fixture Dashboard" in dashboard_html
+    assert "Who is spending the budget" in dashboard_html
+    assert "Most expensive sessions" in dashboard_html
+    assert "Recent cost pulse" in dashboard_html
+    assert "Latest assistant usage rows" in dashboard_html
+
     rows = json.loads(run("rows", "--root", str(FIXTURE_ROOT), "--session-id", "child-session", "--json"))
     assert len(rows) == 1
     assert rows[0]["session_id"] == "child-session"
