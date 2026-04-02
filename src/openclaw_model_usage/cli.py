@@ -5,6 +5,7 @@ import argparse
 import html
 import json
 import re
+import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -682,14 +683,84 @@ def compact_model_name(provider: str, model: str) -> str:
 
 
 def compact_session_name(item: dict[str, Any]) -> str:
-    bits = [item["session_id"]]
-    if item.get("label"):
-        bits.append(item["label"])
-    if item.get("parent_session_id"):
-        bits.append(f"parent {item['parent_session_id']}")
-    if item.get("spawn_depth") is not None:
-        bits.append(f"depth {item['spawn_depth']}")
-    return " | ".join(bits)
+    primary, secondary = session_display_parts(item)
+    return primary if not secondary else f"{primary} | {secondary}"
+
+
+def is_probably_uuidish(value: str | None) -> bool:
+    return bool(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f-]{27,36}", value, flags=re.IGNORECASE))
+
+
+def humanize_channel(value: str | None) -> str | None:
+    if not value:
+        return None
+    mapping = {"discord": "Discord", "telegram": "Telegram", "whatsapp": "WhatsApp", "signal": "Signal", "slack": "Slack"}
+    return mapping.get(value.lower(), value.replace('-', ' ').title())
+
+
+def normalize_session_label(label: str | None, channel: str | None = None) -> tuple[str | None, str | None]:
+    if not isinstance(label, str) or not label.strip():
+        return None, None
+    label = label.strip()
+    route_match = re.fullmatch(r"([a-z]+):([^#]*)#(.+)", label)
+    if route_match:
+        route_channel, _, tail = route_match.groups()
+        channel_name = humanize_channel(route_channel) or route_channel.title()
+        return f"{channel_name} · {tail}", label
+    if is_probably_uuidish(label):
+        return None, label
+    return label, None
+
+
+def session_display_parts(item: dict[str, Any]) -> tuple[str, str | None]:
+    label, original_label = normalize_session_label(item.get("session_label") or item.get("label") or item.get("display_name"), item.get("channel"))
+    if label:
+        secondary_bits = []
+        if item.get("channel"):
+            secondary_bits.append(humanize_channel(item.get("channel")) or str(item.get("channel")))
+        if item.get("spawn_depth") is not None:
+            secondary_bits.append(f"depth {item['spawn_depth']}")
+        elif item.get("parent_session_id"):
+            secondary_bits.append("subagent")
+        if item.get("status"):
+            secondary_bits.append(str(item["status"]))
+        secondary = " • ".join(bit for bit in secondary_bits if bit)
+        if not secondary and original_label and original_label != label:
+            secondary = original_label
+        return label, secondary or None
+
+    channel_name = humanize_channel(item.get("channel"))
+    if item.get("spawn_depth") is not None or item.get("parent_session_id"):
+        depth = item.get("spawn_depth")
+        role = item.get("subagent_role")
+        primary = f"Subagent depth {depth}" if depth is not None else "Subagent session"
+        secondary_bits = [channel_name, role, f"agent {item['agent']}" if item.get('agent') else None]
+        return primary, " • ".join(bit for bit in secondary_bits if bit) or None
+
+    if channel_name:
+        primary = f"{channel_name} session"
+        secondary_bits = [f"agent {item['agent']}" if item.get('agent') else None, item.get('status')]
+        if item.get("session_id") and not is_probably_uuidish(str(item["session_id"])):
+            secondary_bits.append(str(item["session_id"]))
+        return primary, " • ".join(bit for bit in secondary_bits if bit) or None
+
+    if item.get("agent") == "main":
+        return "Main session", str(item.get("status")) if item.get("status") else None
+    if item.get("agent"):
+        return f"{item['agent']} session", str(item.get("status")) if item.get("status") else None
+    session_id = str(item.get("session_id") or "session")
+    if is_probably_uuidish(session_id):
+        return f"Session {session_id[:8]}", session_id
+    return session_id, None
+
+
+def render_session_cell(item: dict[str, Any]) -> str:
+    primary, secondary = session_display_parts(item)
+    detail = secondary or (str(item.get("session_id")) if item.get("session_id") and primary != item.get("session_id") else None)
+    safe_primary = html.escape(primary)
+    safe_detail = html.escape(detail) if detail else ""
+    detail_html = f'<span class="table-subline">{safe_detail}</span>' if detail else ''
+    return f'<div class="table-primary-cell"><strong>{safe_primary}</strong>{detail_html}</div>'
 
 
 def render_ranked(items: list[tuple[str, str]], empty: str = "(none)") -> str:
@@ -851,23 +922,63 @@ def compute_totals_from_collection(items: list[dict[str, Any]], key_name: str) -
     }
 
 
-def mini_bar_svg(values: list[float]) -> str:
-    if not values:
+def render_trend_svg(points: list[tuple[str, dict[str, float | int]]]) -> str:
+    if not points:
         return '<div class="empty-state">No recent trend data.</div>'
-    width = 100
-    height = 36
-    step = width / max(len(values), 1)
-    max_value = max(values) or 1
+    width = 320
+    height = 180
+    pad_left = 18
+    pad_right = 12
+    pad_top = 12
+    pad_bottom = 28
+    plot_width = width - pad_left - pad_right
+    plot_height = height - pad_top - pad_bottom
+    costs = [float(vals["cost_total_usd"]) for _, vals in points]
+    calls = [int(vals["calls"]) for _, vals in points]
+    max_cost = max(costs) or 1.0
+    max_calls = max(calls) or 1
+    step = plot_width / max(len(points), 1)
+    bar_width = max(12.0, step * 0.58)
+    line_points = []
+    area_points = []
     bars = []
-    for idx, value in enumerate(values):
-        bar_height = max(2.0, (value / max_value) * (height - 6)) if value > 0 else 2.0
-        x = idx * step + 1
-        y = height - bar_height - 2
-        bar_width = max(3.0, step - 2)
-        bars.append(
-            f'<rect x="{x:.2f}" y="{y:.2f}" width="{bar_width:.2f}" height="{bar_height:.2f}" rx="2" fill="rgba(110, 231, 183, 0.18)" stroke="#6ee7b7" stroke-width="1" />'
-        )
-    return f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" aria-hidden="true">{"".join(bars)}</svg>'
+    labels = []
+    for idx, (day, vals) in enumerate(points):
+        cost = float(vals["cost_total_usd"])
+        call_count = int(vals["calls"])
+        center_x = pad_left + step * idx + step / 2
+        y = pad_top + plot_height - ((cost / max_cost) * plot_height)
+        line_points.append(f"{center_x:.2f},{y:.2f}")
+        area_points.append((center_x, y))
+        bar_height = max(4.0, (call_count / max_calls) * (plot_height * 0.48)) if call_count else 4.0
+        bar_y = pad_top + plot_height - bar_height
+        bars.append(f'<rect x="{center_x - bar_width / 2:.2f}" y="{bar_y:.2f}" width="{bar_width:.2f}" height="{bar_height:.2f}" rx="7" fill="rgba(96, 165, 250, 0.24)" stroke="rgba(125, 211, 252, 0.32)" stroke-width="1" />')
+        labels.append(f'<text x="{center_x:.2f}" y="{height - 8:.2f}" text-anchor="middle" fill="#7f96b5" font-size="10">{html.escape(day[5:])}</text>')
+    area_path = [f'M {area_points[0][0]:.2f} {pad_top + plot_height:.2f}']
+    area_path += [f'L {x:.2f} {y:.2f}' for x, y in area_points]
+    area_path.append(f'L {area_points[-1][0]:.2f} {pad_top + plot_height:.2f} Z')
+    grid = ''.join(
+        f'<line x1="{pad_left}" y1="{pad_top + (plot_height / 4) * idx:.2f}" x2="{width - pad_right}" y2="{pad_top + (plot_height / 4) * idx:.2f}" stroke="rgba(255,255,255,0.08)" stroke-dasharray="4 6" />'
+        for idx in range(5)
+    )
+    points_svg = ''.join(
+        f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.5" fill="#07111f" stroke="#6ee7b7" stroke-width="2" />'
+        for x, y in area_points
+    )
+    avg_cost = statistics.mean(costs)
+    return (
+        f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" aria-hidden="true">'
+        f'<defs><linearGradient id="trend-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(110,231,183,0.34)" /><stop offset="100%" stop-color="rgba(110,231,183,0.03)" /></linearGradient></defs>'
+        f'{grid}'
+        f'<path d="{" ".join(area_path)}" fill="url(#trend-area)" />'
+        f'{"".join(bars)}'
+        f'<polyline fill="none" stroke="#6ee7b7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="{" ".join(line_points)}" />'
+        f'{points_svg}'
+        f'{"".join(labels)}'
+        f'<text x="{pad_left}" y="14" fill="#9bb0cb" font-size="10">max {html.escape(fmt_money(max_cost))}</text>'
+        f'<text x="{width - pad_right}" y="14" text-anchor="end" fill="#9bb0cb" font-size="10">avg {html.escape(fmt_money(avg_cost))}</text>'
+        '</svg>'
+    )
 
 
 def render_dashboard_table(headers: list[str], rows: list[list[str]], empty: str = "No data.") -> str:
@@ -913,7 +1024,7 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
                 '<div class="current-grid">',
                 f'<div><span class="eyebrow">Current model</span><strong>{html.escape(compact_model_name(current["provider"], current["model"]))}</strong></div>',
                 f'<div><span class="eyebrow">Agent</span><strong>{html.escape(current["agent"])}</strong></div>',
-                f'<div><span class="eyebrow">Session</span><strong>{html.escape(current["session_id"])}</strong></div>',
+                f'<div><span class="eyebrow">Session</span>{render_session_cell(current)}</div>',
                 f'<div><span class="eyebrow">Last activity</span><strong>{html.escape(fmt_timestamp(current["timestamp"]))}</strong></div>',
                 '</div>',
             ]
@@ -938,7 +1049,7 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
         ["Session", "Agent", "Cost", "Tokens", "Calls", "Status"],
         [
             [
-                html.escape(item.get("label") or item["session_id"]),
+                render_session_cell(item),
                 html.escape(item["agent"]),
                 fmt_money(item["cost_total_usd"]),
                 fmt_number(item["total_tokens"]),
@@ -970,7 +1081,7 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
             [
                 html.escape(fmt_timestamp(item["timestamp"])),
                 html.escape(item["agent"]),
-                html.escape(item.get("session_label") or item["session_id"]),
+                render_session_cell(item),
                 html.escape(compact_model_name(item["provider"], item["model"])),
                 fmt_number(item["total_tokens"]),
                 fmt_money(item["cost_total_usd"]),
@@ -984,7 +1095,18 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
         f'<div class="trend-day"><div class="trend-day-header"><strong>{html.escape(day)}</strong><span>{fmt_money(float(vals["cost_total_usd"]))}</span></div><div class="trend-metrics"><span>{fmt_number(int(vals["total_tokens"]))} tok</span><span>{fmt_number(int(vals["calls"]))} calls</span></div></div>'
         for day, vals in reversed(recent_days)
     ) or '<div class="empty-state">No daily trend data.</div>'
-    spark = mini_bar_svg([float(vals["cost_total_usd"]) for _, vals in recent_days])
+    trend_summary = ''
+    if recent_days:
+        trend_costs = [float(vals["cost_total_usd"]) for _, vals in recent_days]
+        trend_calls = [int(vals["calls"]) for _, vals in recent_days]
+        trend_summary = ''.join([
+            '<div class="trend-summary">',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_money(sum(trend_costs)))}</strong><span>7-day spend</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_money(max(trend_costs)))}</strong><span>Peak day</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_number(sum(trend_calls)))}</strong><span>Total calls</span></span>',
+            '</div>',
+        ])
+    spark = render_trend_svg(recent_days)
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -1008,12 +1130,18 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
     .stat-card strong {{ display:block; font-size:clamp(1.3rem, 3vw, 2rem); margin-bottom:8px; }}
     .section-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; margin-bottom:14px; }}
     .table-wrap {{ overflow:auto; margin-top:12px; }}
+    .table-primary-cell strong {{ display:block; font-size:.96rem; line-height:1.3; }}
+    .table-subline {{ display:block; margin-top:4px; color:var(--muted); font-size:.78rem; word-break:break-word; }}
     table {{ width:100%; border-collapse:collapse; min-width:520px; }}
     th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); font-size:.94rem; }}
     th {{ color:var(--muted); font-weight:600; background:rgba(15,27,45,.96); }}
     .current-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin-top:12px; }}
     .trend-box {{ display:grid; gap:12px; }}
-    .trend-chart {{ height:120px; padding:8px; border-radius:16px; background:rgba(255,255,255,.03); border:1px solid var(--border); }}
+    .trend-summary {{ display:flex; flex-wrap:wrap; gap:10px; }}
+    .trend-pill {{ display:inline-flex; flex-direction:column; gap:3px; padding:10px 12px; border-radius:999px; background:rgba(255,255,255,.04); border:1px solid var(--border); min-width:110px; }}
+    .trend-pill strong {{ font-size:1rem; }}
+    .trend-pill span {{ color:var(--muted); font-size:.78rem; }}
+    .trend-chart {{ height:180px; padding:10px; border-radius:16px; background:linear-gradient(180deg, rgba(110,231,183,.06), rgba(255,255,255,.02)); border:1px solid var(--border); }}
     .trend-chart svg {{ width:100%; height:100%; }}
     .trend-days {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; }}
     .trend-day {{ padding:12px; border-radius:14px; background:rgba(255,255,255,.03); border:1px solid var(--border); }}
@@ -1021,7 +1149,7 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
     .trend-metrics {{ margin-top:8px; color:var(--muted); font-size:.88rem; }}
     .empty-state {{ padding:18px; border:1px dashed var(--border); border-radius:14px; color:var(--muted); text-align:center; margin-top:10px; }}
     .footer {{ margin-top:18px; color:var(--muted); font-size:.85rem; }}
-    @media (max-width: 820px) {{ .hero, .section-grid, .stats, .current-grid {{ grid-template-columns:1fr; }} .page {{ padding:16px 12px 36px; }} .panel {{ border-radius:16px; }} table {{ min-width:460px; }} }}
+    @media (max-width: 820px) {{ .hero, .section-grid, .stats, .current-grid {{ grid-template-columns:1fr; }} .page {{ padding:16px 12px 36px; }} .panel {{ border-radius:16px; }} table {{ min-width:460px; }} .trend-chart {{ height:170px; }} .trend-days {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
@@ -1051,7 +1179,7 @@ def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
     </section>
     <section class="section-grid">
       <article class="panel"><span class="eyebrow">Top sessions</span><h2>Most expensive sessions</h2>{sessions_table}</article>
-      <article class="panel"><span class="eyebrow">Daily trend</span><h2>Recent cost pulse</h2><div class="trend-box"><div class="trend-chart">{spark}</div><div class="trend-days">{trend_cards}</div></div></article>
+      <article class="panel"><span class="eyebrow">Daily trend</span><h2>Recent cost pulse</h2><div class="trend-box">{trend_summary}<div class="trend-chart">{spark}</div><div class="trend-days">{trend_cards}</div></div></article>
     </section>
     <section class="panel"><span class="eyebrow">Recent activity</span><h2>Latest assistant usage rows</h2>{recent_table}</section>
     <p class="footer">Generated locally by openclaw-model-usage. Self-contained HTML output for easy sharing or opening on your phone.</p>

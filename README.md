@@ -112,9 +112,9 @@ The report is self-contained and includes:
 - current/latest activity
 - top agents
 - top models
-- top sessions
-- recent daily cost trend
-- recent assistant usage rows
+- top sessions with friendlier session names when metadata exists
+- recent daily cost trend with a static line + histogram hybrid chart
+- recent assistant usage rows with better session labels
 
 ## Useful filters
 
