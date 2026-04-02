@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"child-session","timestamp":"2026-03-27T08:55:00.000Z","cwd":"/tmp/workspace"}
+{"type":"message","timestamp":"2026-03-27T09:00:00.000Z","message":{"role":"assistant","provider":"ollama","model":"kimi-k2.5:cloud","usage":{"input":500,"output":100,"cacheRead":0,"cacheWrite":0,"totalTokens":600,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}}

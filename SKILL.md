@@ -32,6 +32,9 @@ Run the bundled script:
 python {baseDir}/scripts/model_usage.py current
 python {baseDir}/scripts/model_usage.py summary
 python {baseDir}/scripts/model_usage.py agents
+python {baseDir}/scripts/model_usage.py sessions
+python {baseDir}/scripts/model_usage.py subagents
+python {baseDir}/scripts/model_usage.py session-tree
 python {baseDir}/scripts/model_usage.py daily --limit 20
 ```
 
