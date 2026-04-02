@@ -23,6 +23,7 @@ uv run --project . openclaw-model-usage overview
 uv run --project . openclaw-model-usage top-agents
 uv run --project . openclaw-model-usage top-sessions
 uv run --project . openclaw-model-usage current
+uv run --project . openclaw-model-usage dashboard
 uv run --project . openclaw-model-usage overview --json --pretty
 ```
 
@@ -46,6 +47,7 @@ The existing detailed/raw views remain available:
 - `daily`
 - `recent`
 - `rows`
+- `dashboard` — writes a responsive self-contained HTML report locally
 
 ## Example output
 
@@ -86,7 +88,33 @@ python3 scripts/model_usage.py overview
 python3 scripts/model_usage.py top-agents
 python3 scripts/model_usage.py top-sessions
 python3 scripts/model_usage.py session-tree
+python3 scripts/model_usage.py dashboard --out dist/dashboard.html
 ```
+
+## HTML dashboard
+
+Generate a local static dashboard:
+
+```bash
+uv run --project . openclaw-model-usage dashboard
+uv run --project . openclaw-model-usage dashboard --out dist/dashboard.html --title "OpenClaw Usage"
+python3 scripts/model_usage.py dashboard --root ~/.openclaw/agents --out dist/dashboard.html
+```
+
+Default output path:
+
+```text
+dist/dashboard.html
+```
+
+The report is self-contained and includes:
+- headline totals for cost, tokens, calls, sessions, agents, and models
+- current/latest activity
+- top agents
+- top models
+- top sessions with friendlier session names when metadata exists
+- recent daily cost trend with a simple mobile-friendly daily cost bar chart, with calls/tokens kept as supporting detail
+- recent assistant usage rows with better session labels
 
 ## Useful filters
 
@@ -94,6 +122,7 @@ python3 scripts/model_usage.py session-tree
 uv run --project . openclaw-model-usage overview --agent tars-code --since-days 7
 uv run --project . openclaw-model-usage top-sessions --channel discord --limit 10
 uv run --project . openclaw-model-usage subagents --channel discord --json --pretty
+uv run --project . openclaw-model-usage dashboard --channel discord --since-days 7 --out dist/discord-dashboard.html
 ```
 
 ## Data sources

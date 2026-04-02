@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
+import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -93,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
             "top-sessions",
             "subagents",
             "session-tree",
+            "dashboard",
         ],
         nargs="?",
         default="overview",
@@ -107,6 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=5, help="Limit rows for top/recent/daily/session listings (default: 5)")
     p.add_argument("--json", action="store_true", help="Emit JSON output")
     p.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    p.add_argument("--out", help="Output path for generated dashboard HTML")
+    p.add_argument("--title", default="OpenClaw Model Usage Dashboard", help="Dashboard title for HTML output")
     return p
 
 
@@ -645,6 +650,14 @@ def build_overview(rows: list[UsageRow], session_meta: dict[tuple[str, str], Ses
     }
 
 
+def build_dashboard_payload(rows: list[UsageRow], session_meta: dict[tuple[str, str], SessionMeta], limit: int) -> dict[str, Any]:
+    return {
+        "overview": build_overview(rows, session_meta, limit),
+        "daily": summarise_daily(rows)["daily"],
+        "recent": [asdict(row) for row in rows[-limit:][::-1]],
+    }
+
+
 def fmt_money(value: float) -> str:
     return f"${value:,.4f}"
 
@@ -653,19 +666,101 @@ def fmt_tokens(value: int) -> str:
     return f"{value:,} tok"
 
 
+def fmt_number(value: int | float) -> str:
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:,.2f}"
+    return f"{int(value):,}"
+
+
+def fmt_timestamp(value: str | None) -> str:
+    if not value:
+        return "—"
+    return value.replace("T", " ").replace("Z", " UTC")
+
+
 def compact_model_name(provider: str, model: str) -> str:
     return f"{provider}/{model}"
 
 
 def compact_session_name(item: dict[str, Any]) -> str:
-    bits = [item["session_id"]]
-    if item.get("label"):
-        bits.append(item["label"])
-    if item.get("parent_session_id"):
-        bits.append(f"parent {item['parent_session_id']}")
-    if item.get("spawn_depth") is not None:
-        bits.append(f"depth {item['spawn_depth']}")
-    return " | ".join(bits)
+    primary, secondary = session_display_parts(item)
+    return primary if not secondary else f"{primary} | {secondary}"
+
+
+def is_probably_uuidish(value: str | None) -> bool:
+    return bool(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f-]{27,36}", value, flags=re.IGNORECASE))
+
+
+def humanize_channel(value: str | None) -> str | None:
+    if not value:
+        return None
+    mapping = {"discord": "Discord", "telegram": "Telegram", "whatsapp": "WhatsApp", "signal": "Signal", "slack": "Slack"}
+    return mapping.get(value.lower(), value.replace('-', ' ').title())
+
+
+def normalize_session_label(label: str | None, channel: str | None = None) -> tuple[str | None, str | None]:
+    if not isinstance(label, str) or not label.strip():
+        return None, None
+    label = label.strip()
+    route_match = re.fullmatch(r"([a-z]+):([^#]*)#(.+)", label)
+    if route_match:
+        route_channel, _, tail = route_match.groups()
+        channel_name = humanize_channel(route_channel) or route_channel.title()
+        return f"{channel_name} · {tail}", label
+    if is_probably_uuidish(label):
+        return None, label
+    return label, None
+
+
+def session_display_parts(item: dict[str, Any]) -> tuple[str, str | None]:
+    label, original_label = normalize_session_label(item.get("session_label") or item.get("label") or item.get("display_name"), item.get("channel"))
+    if label:
+        secondary_bits = []
+        if item.get("channel"):
+            secondary_bits.append(humanize_channel(item.get("channel")) or str(item.get("channel")))
+        if item.get("spawn_depth") is not None:
+            secondary_bits.append(f"depth {item['spawn_depth']}")
+        elif item.get("parent_session_id"):
+            secondary_bits.append("subagent")
+        if item.get("status"):
+            secondary_bits.append(str(item["status"]))
+        secondary = " • ".join(bit for bit in secondary_bits if bit)
+        if not secondary and original_label and original_label != label:
+            secondary = original_label
+        return label, secondary or None
+
+    channel_name = humanize_channel(item.get("channel"))
+    if item.get("spawn_depth") is not None or item.get("parent_session_id"):
+        depth = item.get("spawn_depth")
+        role = item.get("subagent_role")
+        primary = f"Subagent depth {depth}" if depth is not None else "Subagent session"
+        secondary_bits = [channel_name, role, f"agent {item['agent']}" if item.get('agent') else None]
+        return primary, " • ".join(bit for bit in secondary_bits if bit) or None
+
+    if channel_name:
+        primary = f"{channel_name} session"
+        secondary_bits = [f"agent {item['agent']}" if item.get('agent') else None, item.get('status')]
+        if item.get("session_id") and not is_probably_uuidish(str(item["session_id"])):
+            secondary_bits.append(str(item["session_id"]))
+        return primary, " • ".join(bit for bit in secondary_bits if bit) or None
+
+    if item.get("agent") == "main":
+        return "Main session", str(item.get("status")) if item.get("status") else None
+    if item.get("agent"):
+        return f"{item['agent']} session", str(item.get("status")) if item.get("status") else None
+    session_id = str(item.get("session_id") or "session")
+    if is_probably_uuidish(session_id):
+        return f"Session {session_id[:8]}", session_id
+    return session_id, None
+
+
+def render_session_cell(item: dict[str, Any]) -> str:
+    primary, secondary = session_display_parts(item)
+    detail = secondary or (str(item.get("session_id")) if item.get("session_id") and primary != item.get("session_id") else None)
+    safe_primary = html.escape(primary)
+    safe_detail = html.escape(detail) if detail else ""
+    detail_html = f'<span class="table-subline">{safe_detail}</span>' if detail else ''
+    return f'<div class="table-primary-cell"><strong>{safe_primary}</strong>{detail_html}</div>'
 
 
 def render_ranked(items: list[tuple[str, str]], empty: str = "(none)") -> str:
@@ -827,6 +922,238 @@ def compute_totals_from_collection(items: list[dict[str, Any]], key_name: str) -
     }
 
 
+def render_trend_chart(points: list[tuple[str, dict[str, float | int]]]) -> str:
+    if not points:
+        return '<div class="empty-state">No recent trend data.</div>'
+    costs = [float(vals["cost_total_usd"]) for _, vals in points]
+    max_cost = max(costs) or 1.0
+    rows = []
+    for day, vals in reversed(points):
+        cost = float(vals["cost_total_usd"])
+        width = max(8.0, (cost / max_cost) * 100) if cost > 0 else 0.0
+        rows.append(
+            ''.join([
+                '<div class="trend-row">',
+                f'<div class="trend-row-head"><strong>{html.escape(day)}</strong><span>{html.escape(fmt_money(cost))}</span></div>',
+                '<div class="trend-bar-track" aria-hidden="true">',
+                f'<div class="trend-bar-fill" style="width:{width:.1f}%"></div>',
+                '</div>',
+                f'<div class="trend-row-meta"><span>{html.escape(fmt_number(int(vals["calls"])))} calls</span><span>{html.escape(fmt_number(int(vals["total_tokens"])))} tok</span></div>',
+                '</div>',
+            ])
+        )
+    return '<div class="trend-list" role="img" aria-label="Daily cost bars for the last seven days">' + ''.join(rows) + '</div>'
+
+
+def render_dashboard_table(headers: list[str], rows: list[list[str]], empty: str = "No data.") -> str:
+    if not rows:
+        return f'<div class="empty-state">{html.escape(empty)}</div>'
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
+    body_rows = ["<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows]
+    return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{"".join(body_rows)}</tbody></table></div>'
+
+
+def render_dashboard_html(data: dict[str, Any], title: str, limit: int) -> str:
+    overview = data["overview"]
+    totals = overview["totals"]
+    current = overview.get("current")
+    top_agents = overview["top_agents"][:limit]
+    top_sessions = overview["top_sessions"][:limit]
+    top_models = overview["top_models"][:limit]
+    recent = data["recent"][:limit]
+
+    day_totals: dict[str, dict[str, float | int]] = {}
+    for item in data["daily"]:
+        entry = day_totals.setdefault(item["date"], {"cost_total_usd": 0.0, "total_tokens": 0, "calls": 0})
+        entry["cost_total_usd"] = float(entry["cost_total_usd"]) + float(item.get("cost_total_usd") or 0.0)
+        entry["total_tokens"] = int(entry["total_tokens"]) + int(item.get("total_tokens") or 0)
+        entry["calls"] = int(entry["calls"]) + int(item.get("calls") or 0)
+    recent_days = sorted(day_totals.items())[-7:]
+
+    cards = [
+        ("Total cost", fmt_money(float(totals["cost_total_usd"])), f"{totals['calls']} calls"),
+        ("Total tokens", fmt_number(int(totals["total_tokens"])), f"Across {totals['models']} models"),
+        ("Sessions", fmt_number(int(totals["sessions"])), f"{totals['agents']} agents"),
+        ("Window", fmt_timestamp(totals.get("first_timestamp")), f"to {fmt_timestamp(totals.get('last_timestamp'))}"),
+    ]
+    cards_html = "".join(
+        f'<article class="stat-card"><span class="eyebrow">{html.escape(label)}</span><strong>{html.escape(value)}</strong><span class="muted">{html.escape(sub)}</span></article>'
+        for label, value, sub in cards
+    )
+
+    current_html = '<div class="empty-state">No current usage row found.</div>'
+    if current:
+        current_html = "".join(
+            [
+                '<div class="current-grid">',
+                f'<div><span class="eyebrow">Current model</span><strong>{html.escape(compact_model_name(current["provider"], current["model"]))}</strong></div>',
+                f'<div><span class="eyebrow">Agent</span><strong>{html.escape(current["agent"])}</strong></div>',
+                f'<div><span class="eyebrow">Session</span>{render_session_cell(current)}</div>',
+                f'<div><span class="eyebrow">Last activity</span><strong>{html.escape(fmt_timestamp(current["timestamp"]))}</strong></div>',
+                '</div>',
+            ]
+        )
+
+    agents_table = render_dashboard_table(
+        ["Agent", "Cost", "Tokens", "Calls", "Sessions", "Last activity"],
+        [
+            [
+                html.escape(item["agent"]),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                fmt_number(item["sessions"]),
+                html.escape(fmt_timestamp(item.get("last_timestamp"))),
+            ]
+            for item in top_agents
+        ],
+        empty="No agent data.",
+    )
+    sessions_table = render_dashboard_table(
+        ["Session", "Agent", "Cost", "Tokens", "Calls", "Status"],
+        [
+            [
+                render_session_cell(item),
+                html.escape(item["agent"]),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                html.escape(item.get("status") or "—"),
+            ]
+            for item in top_sessions
+        ],
+        empty="No session data.",
+    )
+    models_table = render_dashboard_table(
+        ["Model", "Cost", "Tokens", "Calls", "Agents", "Sessions"],
+        [
+            [
+                html.escape(compact_model_name(item["provider"], item["model"])),
+                fmt_money(item["cost_total_usd"]),
+                fmt_number(item["total_tokens"]),
+                fmt_number(item["calls"]),
+                fmt_number(len(item.get("agents") or [])),
+                fmt_number(item["sessions"]),
+            ]
+            for item in top_models
+        ],
+        empty="No model data.",
+    )
+    recent_table = render_dashboard_table(
+        ["When", "Agent", "Session", "Model", "Tokens", "Cost"],
+        [
+            [
+                html.escape(fmt_timestamp(item["timestamp"])),
+                html.escape(item["agent"]),
+                render_session_cell(item),
+                html.escape(compact_model_name(item["provider"], item["model"])),
+                fmt_number(item["total_tokens"]),
+                fmt_money(item["cost_total_usd"]),
+            ]
+            for item in recent
+        ],
+        empty="No recent activity.",
+    )
+
+    trend_summary = ''
+    if recent_days:
+        trend_costs = [float(vals["cost_total_usd"]) for _, vals in recent_days]
+        trend_calls = [int(vals["calls"]) for _, vals in recent_days]
+        trend_tokens = [int(vals["total_tokens"]) for _, vals in recent_days]
+        trend_summary = ''.join([
+            '<div class="trend-summary">',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_money(sum(trend_costs)))}</strong><span>7-day spend</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_money(max(trend_costs)))}</strong><span>Peak day</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_money(statistics.mean(trend_costs)))}</strong><span>Avg / day</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_number(sum(trend_calls)))}</strong><span>Total calls</span></span>',
+            f'<span class="trend-pill"><strong>{html.escape(fmt_number(sum(trend_tokens)))}</strong><span>Total tokens</span></span>',
+            '</div>',
+        ])
+    spark = render_trend_chart(recent_days)
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: dark; --bg:#07111f; --panel:#0f1b2d; --text:#ecf3ff; --muted:#9bb0cb; --accent:#6ee7b7; --border:rgba(255,255,255,.08); }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; background: radial-gradient(circle at top, #15314f 0%, var(--bg) 38%, #030712 100%); color:var(--text); }}
+    .page {{ max-width:1180px; margin:0 auto; padding:24px 16px 48px; }}
+    .hero {{ display:grid; gap:16px; grid-template-columns:1.5fr 1fr; margin-bottom:18px; }}
+    .panel {{ background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); border:1px solid var(--border); border-radius:20px; padding:18px; box-shadow:0 12px 40px rgba(0,0,0,.25); }}
+    h1,h2,p {{ margin:0; }}
+    .hero h1 {{ font-size:clamp(1.8rem, 4vw, 3rem); line-height:1.05; margin-bottom:10px; }}
+    .eyebrow {{ display:block; text-transform:uppercase; letter-spacing:.12em; color:var(--accent); font-size:.72rem; margin-bottom:8px; }}
+    .muted {{ color:var(--muted); }}
+    .meta {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; color:var(--muted); font-size:.95rem; }}
+    .stats {{ display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; margin-bottom:18px; }}
+    .stat-card strong {{ display:block; font-size:clamp(1.3rem, 3vw, 2rem); margin-bottom:8px; }}
+    .section-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; margin-bottom:14px; }}
+    .table-wrap {{ overflow:auto; margin-top:12px; }}
+    .table-primary-cell strong {{ display:block; font-size:.96rem; line-height:1.3; }}
+    .table-subline {{ display:block; margin-top:4px; color:var(--muted); font-size:.78rem; word-break:break-word; }}
+    table {{ width:100%; border-collapse:collapse; min-width:520px; }}
+    th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); font-size:.94rem; }}
+    th {{ color:var(--muted); font-weight:600; background:rgba(15,27,45,.96); }}
+    .current-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin-top:12px; }}
+    .trend-box {{ display:grid; gap:12px; }}
+    .trend-summary {{ display:flex; flex-wrap:wrap; gap:10px; }}
+    .trend-pill {{ display:inline-flex; flex-direction:column; gap:3px; padding:10px 12px; border-radius:999px; background:rgba(255,255,255,.04); border:1px solid var(--border); min-width:110px; }}
+    .trend-pill strong {{ font-size:1rem; }}
+    .trend-pill span {{ color:var(--muted); font-size:.78rem; }}
+    .trend-chart {{ padding:12px; border-radius:16px; background:linear-gradient(180deg, rgba(110,231,183,.06), rgba(255,255,255,.02)); border:1px solid var(--border); }}
+    .trend-list {{ display:grid; gap:12px; }}
+    .trend-row {{ display:grid; gap:7px; }}
+    .trend-row-head, .trend-row-meta {{ display:flex; align-items:center; justify-content:space-between; gap:10px; }}
+    .trend-row-head strong {{ font-size:.95rem; }}
+    .trend-row-head span {{ font-weight:600; }}
+    .trend-row-meta {{ color:var(--muted); font-size:.82rem; }}
+    .trend-bar-track {{ height:10px; border-radius:999px; background:rgba(255,255,255,.06); overflow:hidden; }}
+    .trend-bar-fill {{ height:100%; border-radius:999px; background:linear-gradient(90deg, rgba(110,231,183,.72), rgba(110,231,183,1)); box-shadow:0 0 0 1px rgba(255,255,255,.08) inset; min-width:8px; }}
+    .empty-state {{ padding:18px; border:1px dashed var(--border); border-radius:14px; color:var(--muted); text-align:center; margin-top:10px; }}
+    .footer {{ margin-top:18px; color:var(--muted); font-size:.85rem; }}
+    @media (max-width: 820px) {{ .hero, .section-grid, .stats, .current-grid {{ grid-template-columns:1fr; }} .page {{ padding:16px 12px 36px; }} .panel {{ border-radius:16px; }} table {{ min-width:460px; }} .trend-summary {{ gap:8px; }} .trend-pill {{ min-width:calc(50% - 4px); }} .trend-chart {{ padding:10px; }} .trend-row-head strong, .trend-row-head span {{ font-size:.92rem; }} .trend-row-meta {{ font-size:.78rem; }} }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <article class="panel">
+        <span class="eyebrow">OpenClaw model usage</span>
+        <h1>{html.escape(title)}</h1>
+        <p class="muted">Local-first static dashboard generated from session logs. No server. No browser drama. Just a portable report.</p>
+        <div class="meta">
+          <span>{fmt_number(totals['calls'])} calls</span>
+          <span>{fmt_number(totals['sessions'])} sessions</span>
+          <span>{fmt_number(totals['agents'])} agents</span>
+          <span>{fmt_number(totals['models'])} models</span>
+        </div>
+      </article>
+      <article class="panel">
+        <span class="eyebrow">Current context</span>
+        <h2>Latest activity</h2>
+        {current_html}
+      </article>
+    </section>
+    <section class="stats">{cards_html}</section>
+    <section class="section-grid">
+      <article class="panel"><span class="eyebrow">Top agents</span><h2>Who is spending the budget</h2>{agents_table}</article>
+      <article class="panel"><span class="eyebrow">Top models</span><h2>Which models are doing the work</h2>{models_table}</article>
+    </section>
+    <section class="section-grid">
+      <article class="panel"><span class="eyebrow">Top sessions</span><h2>Most expensive sessions</h2>{sessions_table}</article>
+      <article class="panel"><span class="eyebrow">Daily trend</span><h2>Recent cost pulse</h2><div class="trend-box">{trend_summary}<div class="trend-chart">{spark}</div></div></article>
+    </section>
+    <section class="panel"><span class="eyebrow">Recent activity</span><h2>Latest assistant usage rows</h2>{recent_table}</section>
+    <p class="footer">Generated locally by openclaw-model-usage. Self-contained HTML output for easy sharing or opening on your phone.</p>
+  </main>
+</body>
+</html>'''
+
+
 def main() -> int:
     args = build_parser().parse_args()
     rows, session_meta = load_rows(
@@ -858,8 +1185,20 @@ def main() -> int:
         payload = [asdict(r) for r in rows[-args.limit:][::-1]]
     elif command == "rows":
         payload = [asdict(r) for r in rows[-args.limit:]]
+    elif command == "dashboard":
+        payload = build_dashboard_payload(rows, session_meta, args.limit)
     else:
         raise AssertionError("unexpected command")
+
+    if command == "dashboard":
+        output_path = Path(args.out).expanduser() if args.out else Path("dist") / "dashboard.html"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(render_dashboard_html(payload, args.title, args.limit), encoding="utf-8")
+        if args.json:
+            print(json.dumps({"output": str(output_path.resolve()), "title": args.title, "rows": payload["overview"]["rows"]}, indent=2 if args.pretty else None))
+        else:
+            print(f"Wrote dashboard HTML to {output_path.resolve()}")
+        return 0
 
     if args.json:
         print(json.dumps(payload, indent=2 if args.pretty else None))
