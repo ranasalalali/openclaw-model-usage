@@ -2,14 +2,15 @@
 
 All notable changes to `openclaw-model-usage` will be documented in this file.
 
-## Unreleased
+## 1.2.0
 
 - add human-friendly `overview`, `top-agents`, and `top-sessions` commands on top of the session-aware backend
 - make the default non-JSON output compact and ranked for operator/chat use while preserving JSON output for scripting
 - expand smoke coverage for the new summary UX and aliases
 - refresh README examples toward the new default workflow
 - add a local-first `dashboard` command that writes a responsive self-contained HTML usage report
-- cover dashboard generation in the smoke test
+- improve dashboard presentation with friendlier session names and a cleaner mobile-friendly daily cost trend section
+- support the intended flow of short summary first, HTML dashboard second
 
 ## 1.1.0
 
