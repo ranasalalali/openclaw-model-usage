@@ -15,7 +15,6 @@ FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "sample_parent_usage.jsonl"
 FIXTURE_CHILD = ROOT / "tests" / "fixtures" / "sample_subagent_usage.jsonl"
 FIXTURE_SESSIONS = ROOT / "tests" / "fixtures" / "sample_sessions.json"
 
-
 PYTHON = ROOT / ".venv" / "bin" / "python"
 
 
@@ -55,11 +54,27 @@ def main() -> int:
         '{"type":"message","id":"a1","timestamp":"2026-03-27T09:15:02.000Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.4","usage":{"input":400,"output":200,"cacheRead":0,"cacheWrite":0,"totalTokens":600,"cost":{"input":0.001,"output":0.001,"cacheRead":0.0,"cacheWrite":0.0,"total":0.002}},"content":[{"type":"text","text":"done"}]}}\n'
     )
 
-    summary = json.loads(run("summary", "--root", str(FIXTURE_ROOT), "--json"))
-    assert summary["rows"] == 4
-    assert summary["models"][0]["model"] == "gpt-5.4"
-    assert summary["models"][0]["total_tokens"] == 3100
-    assert summary["models"][0]["sessions"] == 2
+    overview = json.loads(run("overview", "--root", str(FIXTURE_ROOT), "--json"))
+    assert overview["rows"] == 4
+    assert overview["totals"]["total_tokens"] == 3700
+    assert overview["totals"]["cost_total_usd"] == 0.0119
+    assert overview["top_agents"][0]["agent"] == "sample-agent"
+    assert overview["top_sessions"][0]["session_id"] == "parent-session"
+    assert overview["current"]["session_label"] == "prompt-only-subagent"
+
+    summary_text = run("overview", "--root", str(FIXTURE_ROOT), "--limit", "3")
+    assert "Usage overview" in summary_text
+    assert "Top agents" in summary_text
+    assert "Top sessions" in summary_text
+    assert "Top models" in summary_text
+
+    top_agents_text = run("top-agents", "--root", str(FIXTURE_ROOT), "--limit", "3")
+    assert "Top agents" in top_agents_text
+    assert "sample-agent" in top_agents_text
+
+    top_sessions_text = run("top-sessions", "--root", str(FIXTURE_ROOT), "--limit", "3")
+    assert "Top sessions" in top_sessions_text
+    assert "parent-session" in top_sessions_text
 
     current = json.loads(run("current", "--root", str(FIXTURE_ROOT), "--json"))
     assert current["model"] == "gpt-5.4"
@@ -70,16 +85,16 @@ def main() -> int:
     assert agents["agents"][0]["agent"] == "sample-agent"
     assert agents["agents"][0]["sessions"] == 3
 
-    sessions = json.loads(run("sessions", "--root", str(FIXTURE_ROOT), "--json"))
-    assert len(sessions["sessions"]) == 4
-    child = next(item for item in sessions["sessions"] if item["session_id"] == "child-session")
+    sessions_json = json.loads(run("sessions", "--root", str(FIXTURE_ROOT), "--json"))
+    assert len(sessions_json["sessions"]) == 4
+    child = next(item for item in sessions_json["sessions"] if item["session_id"] == "child-session")
     assert child["parent_session_id"] == "parent-session"
     assert child["spawn_depth"] == 1
-    metadata_only = next(item for item in sessions["sessions"] if item["session_id"] == "child-no-usage")
+    metadata_only = next(item for item in sessions_json["sessions"] if item["session_id"] == "child-no-usage")
     assert metadata_only["parent_session_id"] == "parent-session"
     assert metadata_only["calls"] == 0
     assert metadata_only["started_at"] == "2026-03-27T09:10:00Z"
-    prompt_only = next(item for item in sessions["sessions"] if item["session_id"] == "child-from-prompt")
+    prompt_only = next(item for item in sessions_json["sessions"] if item["session_id"] == "child-from-prompt")
     assert prompt_only["label"] == "prompt-only-subagent"
     assert prompt_only["parent_session_id"] == "parent-session"
     assert prompt_only["spawn_depth"] == 1
